@@ -23,6 +23,7 @@
     "react": "19.2.4",
     "react-day-picker": "^9.14.0",
     "react-dom": "19.2.4",
+    "react-is": "^19.2.5",
     "react-resizable-panels": "^4.10.0",
     "recharts": "^3.8.0",
     "shadcn": "^4.5.0",
@@ -36,9 +37,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/react-is": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "packageManager": "yarn@4.14.1"
 }
