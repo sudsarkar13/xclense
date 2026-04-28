@@ -110,7 +110,7 @@ export default function Home(): React.JSX.Element {
             <div className="grid auto-rows-fr gap-3 md:gap-4 xl:grid-cols-12">
               <div className="xl:col-span-4">
                 <SystemHealthCard
-                  className="min-h-[300px]"
+                  className="min-h-[250px]"
                   score={healthScore}
                   totalIssues={data.analysis.totalIssues}
                   memoryUsedBytes={data.health.memoryUsedBytes}
@@ -122,7 +122,7 @@ export default function Home(): React.JSX.Element {
 
               <div className="xl:col-span-4">
                 <MemoryPressureCard
-                  className="min-h-[300px]"
+                  className="min-h-[250px]"
                   pressurePercent={data.health.memoryPressurePercent}
                   memoryUsedBytes={data.health.memoryUsedBytes}
                   memoryFreeBytes={data.health.memoryFreeBytes}
@@ -131,7 +131,7 @@ export default function Home(): React.JSX.Element {
 
               <div className="xl:col-span-4">
                 <StorageOverviewCard
-                  className="min-h-[300px]"
+                  className="min-h-[250px]"
                   totalBytes={data.storage.totalBytes}
                   freeBytes={data.storage.freeBytes}
                   usedPercent={data.storage.usedPercent}

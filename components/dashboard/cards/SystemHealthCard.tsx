@@ -30,14 +30,14 @@ export function SystemHealthCard({
       : "No urgent issues found. System is running clean.";
 
   return (
-    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
+    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-3", className)}>
       <div className="flex items-start justify-between gap-3">
-        <h2 className="text-xl font-semibold">Overall System Health</h2>
+        <h2 className="text-lg font-semibold">Overall System Health</h2>
         <button
           type="button"
           onClick={onReload}
           disabled={isReloading}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/15 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/15 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Reload overall system health"
           title="Reload"
         >
@@ -45,32 +45,32 @@ export function SystemHealthCard({
         </button>
       </div>
 
-      <div className="mt-4 flex items-center gap-4">
+      <div className="mt-3 flex items-center gap-3">
         <AnimatedCircularProgressBar
           value={score}
           gaugePrimaryColor="rgb(6 182 212)"
           gaugeSecondaryColor="rgba(148, 163, 184, 0.35)"
-          className="shrink-0"
+          className="w-20 shrink-0 text-xl"
         />
         <div>
-          <p className={cn("text-4xl font-semibold leading-none", statusColorClass(score))}>{statusTone(score)}</p>
-          <p className="mt-2 text-sm text-zinc-300">Your Mac is running smoothly.</p>
+          <p className={cn("text-3xl font-semibold leading-none", statusColorClass(score))}>{statusTone(score)}</p>
+          <p className="mt-1 text-xs text-zinc-300">Your Mac is running smoothly.</p>
         </div>
       </div>
 
-      <div className="mt-4 border-t border-white/10 pt-3">
-        <p className="text-lg font-medium text-zinc-100">Recommendations</p>
-        <p className="mt-1 text-sm text-zinc-300">{recommendationText}</p>
+      <div className="mt-3 border-t border-white/10 pt-2">
+        <p className="text-base font-medium text-zinc-100">Recommendations</p>
+        <p className="mt-0.5 text-xs text-zinc-300">{recommendationText}</p>
 
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <p className="text-xs text-zinc-400">
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <p className="text-[11px] text-zinc-400">
             Memory snapshot: {formatGb(memoryUsedBytes)} used / {formatGb(memoryFreeBytes)} free
           </p>
           <button
             type="button"
-            className="inline-flex items-center gap-2 rounded-md bg-amber-400 px-4 py-1.5 text-sm font-semibold text-amber-950 transition hover:bg-amber-300"
+            className="inline-flex items-center gap-1.5 rounded-md bg-amber-400 px-3 py-1 text-xs font-semibold text-amber-950 transition hover:bg-amber-300"
           >
-            <Wrench className="h-3.5 w-3.5" />
+            <Wrench className="h-3 w-3" />
             Fix
           </button>
         </div>
