@@ -33,6 +33,22 @@ export interface SystemHealth {
   scannedAtEpochMs: number;
 }
 
+export interface IssueReport {
+  id: string;
+  title: string;
+  severity: "critical" | "warning" | "info";
+  confidence: number;
+  evidence: string[];
+  recommendation: string;
+  suggestedAction: string;
+}
+
+export interface AnalysisReport {
+  generatedAtEpochMs: number;
+  totalIssues: number;
+  issues: IssueReport[];
+}
+
 /**
  * Determines whether the app is running inside a Tauri runtime.
  */
@@ -75,4 +91,9 @@ export const listProcesses = async (): Promise<ProcessInfo[]> => {
 export const getSystemHealth = async (): Promise<SystemHealth> => {
   ensureTauriRuntime();
   return invoke<SystemHealth>("get_system_health");
+};
+
+export const analyzeIssues = async (): Promise<AnalysisReport> => {
+  ensureTauriRuntime();
+  return invoke<AnalysisReport>("analyze_issues");
 };

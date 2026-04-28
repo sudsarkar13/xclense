@@ -43,6 +43,26 @@ pub struct SystemHealth {
   pub scanned_at_epoch_ms: u128,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueReport {
+  pub id: String,
+  pub title: String,
+  pub severity: String,
+  pub confidence: f64,
+  pub evidence: Vec<String>,
+  pub recommendation: String,
+  pub suggested_action: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisReport {
+  pub generated_at_epoch_ms: u128,
+  pub total_issues: usize,
+  pub issues: Vec<IssueReport>,
+}
+
 mod commands {
   use super::*;
 
@@ -229,6 +249,112 @@ mod commands {
       scanned_at_epoch_ms: now_epoch_ms(),
     })
   }
+
+  #[tauri::command]
+  pub fn analyze_issues() -> Result<AnalysisReport, String> {
+    let storage = scan_storage()?;
+    let processes = list_processes()?;
+    let health = get_system_health()?;
+
+    let mut issues: Vec<IssueReport> = Vec::new();
+
+    if storage.used_percent >= 90.0 {
+      issues.push(IssueReport {
+        id: "storage-critical-001".to_string(),
+        title: "Critical disk saturation".to_string(),
+        severity: "critical".to_string(),
+        confidence: 0.97,
+        evidence: vec![
+          format!("Root volume usage is {:.2}%", storage.used_percent),
+          format!("Free space is {} bytes", storage.free_bytes),
+        ],
+        recommendation:
+          "Immediately free disk space by removing large files or moving archives off-device."
+            .to_string(),
+        suggested_action: "run_storage_cleanup".to_string(),
+      });
+    } else if storage.used_percent >= 75.0 {
+      issues.push(IssueReport {
+        id: "storage-warning-001".to_string(),
+        title: "High disk utilization".to_string(),
+        severity: "warning".to_string(),
+        confidence: 0.9,
+        evidence: vec![format!("Root volume usage is {:.2}%", storage.used_percent)],
+        recommendation:
+          "Review Downloads, caches, and unused applications to recover space proactively."
+            .to_string(),
+        suggested_action: "review_storage_usage".to_string(),
+      });
+    }
+
+    if health.memory_pressure_percent >= 90.0 {
+      issues.push(IssueReport {
+        id: "memory-critical-001".to_string(),
+        title: "Critical memory pressure".to_string(),
+        severity: "critical".to_string(),
+        confidence: 0.95,
+        evidence: vec![format!(
+          "Estimated memory pressure is {:.2}%",
+          health.memory_pressure_percent
+        )],
+        recommendation:
+          "Close memory-heavy applications and restart long-running workloads to avoid instability."
+            .to_string(),
+        suggested_action: "reduce_memory_pressure".to_string(),
+      });
+    } else if health.memory_pressure_percent >= 80.0 {
+      issues.push(IssueReport {
+        id: "memory-warning-001".to_string(),
+        title: "Elevated memory pressure".to_string(),
+        severity: "warning".to_string(),
+        confidence: 0.88,
+        evidence: vec![format!(
+          "Estimated memory pressure is {:.2}%",
+          health.memory_pressure_percent
+        )],
+        recommendation:
+          "Identify high-memory apps and close non-essential sessions before pressure worsens."
+            .to_string(),
+        suggested_action: "inspect_memory_consumers".to_string(),
+      });
+    }
+
+    let heavy_processes: Vec<&ProcessInfo> = processes
+      .iter()
+      .filter(|process| process.cpu_percent >= 70.0 || process.memory_percent >= 25.0)
+      .take(5)
+      .collect();
+
+    if !heavy_processes.is_empty() {
+      let evidence = heavy_processes
+        .iter()
+        .map(|process| {
+          format!(
+            "pid={} name={} cpu={:.2}% mem={:.2}%",
+            process.pid, process.name, process.cpu_percent, process.memory_percent
+          )
+        })
+        .collect();
+
+      issues.push(IssueReport {
+        id: "process-hotspots-001".to_string(),
+        title: "Resource-heavy active processes".to_string(),
+        severity: "info".to_string(),
+        confidence: 0.82,
+        evidence,
+        recommendation:
+          "Review listed processes and terminate only non-critical workloads with sustained high usage."
+            .to_string(),
+        suggested_action: "review_process_candidates".to_string(),
+      });
+    }
+
+    Ok(AnalysisReport {
+      generated_at_epoch_ms: now_epoch_ms(),
+      total_issues: issues.len(),
+      issues,
+    })
+  }
 }
 
 pub fn run() {
@@ -237,7 +363,8 @@ pub fn run() {
       commands::ping_backend,
       commands::scan_storage,
       commands::list_processes,
-      commands::get_system_health
+      commands::get_system_health,
+      commands::analyze_issues
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
