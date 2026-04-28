@@ -87,68 +87,65 @@ export default function Home(): React.JSX.Element {
   }, [data]);
 
   return (
-    <div className="h-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] p-3 text-zinc-100 md:p-4">
-      <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col rounded-2xl border border-white/20 bg-[#0d1226]/85 shadow-2xl backdrop-blur-xl">
-        <div className="border-b border-white/10 px-4 py-2.5 text-center text-xl font-semibold tracking-tight text-zinc-300 md:text-2xl">
-          Xclense - Dashboard
-        </div>
+    <div className="h-screen w-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] font-sans text-zinc-100">
+      <div className="grid h-full min-h-0 w-full grid-cols-12 border border-white/15 bg-[#0d1226]/90 shadow-2xl">
+        <DashboardNav />
 
-        <div className="grid min-h-0 flex-1 grid-cols-12">
-          <DashboardNav />
+        <main className="col-span-12 min-h-0 overflow-auto p-3 md:col-span-9 lg:col-span-10 md:p-4">
+          <DashboardHeader isLoading={isLoading} onRefresh={() => void loadDashboard()} />
 
-          <main className="col-span-12 min-h-0 overflow-auto p-3 md:col-span-9 lg:col-span-10 md:p-4">
-            <DashboardHeader isLoading={isLoading} onRefresh={() => void loadDashboard()} />
+          {errorMessage ? (
+            <div className="mb-3 rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-sm text-red-200">
+              {errorMessage}
+            </div>
+          ) : null}
 
-            {errorMessage ? (
-              <div className="mb-3 rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-sm text-red-200">
-                {errorMessage}
+          {!data && !errorMessage ? (
+            <div className="rounded-lg border border-white/20 bg-white/5 p-4 text-sm text-zinc-300">
+              Waiting for diagnostics data...
+            </div>
+          ) : null}
+
+          {data ? (
+            <div className="grid auto-rows-fr gap-3 md:gap-4 xl:grid-cols-12">
+              <div className="xl:col-span-4">
+                <SystemHealthCard
+                  className="min-h-[300px]"
+                  score={healthScore}
+                  totalIssues={data.analysis.totalIssues}
+                  memoryUsedBytes={data.health.memoryUsedBytes}
+                  memoryFreeBytes={data.health.memoryFreeBytes}
+                />
               </div>
-            ) : null}
 
-            {!data && !errorMessage ? (
-              <div className="rounded-lg border border-white/20 bg-white/5 p-4 text-sm text-zinc-300">
-                Waiting for diagnostics data...
+              <div className="xl:col-span-4">
+                <MemoryPressureCard
+                  className="min-h-[300px]"
+                  pressurePercent={data.health.memoryPressurePercent}
+                  memoryUsedBytes={data.health.memoryUsedBytes}
+                  memoryFreeBytes={data.health.memoryFreeBytes}
+                />
               </div>
-            ) : null}
 
-            {data ? (
-              <div className="grid gap-3 md:gap-4 xl:grid-cols-12">
-                <div className="xl:col-span-4">
-                  <SystemHealthCard
-                    score={healthScore}
-                    totalIssues={data.analysis.totalIssues}
-                    memoryUsedBytes={data.health.memoryUsedBytes}
-                    memoryFreeBytes={data.health.memoryFreeBytes}
-                  />
-                </div>
-
-                <div className="xl:col-span-4">
-                  <MemoryPressureCard
-                    pressurePercent={data.health.memoryPressurePercent}
-                    memoryUsedBytes={data.health.memoryUsedBytes}
-                    memoryFreeBytes={data.health.memoryFreeBytes}
-                  />
-                </div>
-
-                <div className="xl:col-span-4">
-                  <StorageOverviewCard
-                    totalBytes={data.storage.totalBytes}
-                    freeBytes={data.storage.freeBytes}
-                    usedPercent={data.storage.usedPercent}
-                  />
-                </div>
-
-                <div className="xl:col-span-7">
-                  <TopProcessesSection processes={data.processes} />
-                </div>
-
-                <div className="xl:col-span-5">
-                  <IssueLogsSection issues={data.analysis.issues} />
-                </div>
+              <div className="xl:col-span-4">
+                <StorageOverviewCard
+                  className="min-h-[300px]"
+                  totalBytes={data.storage.totalBytes}
+                  freeBytes={data.storage.freeBytes}
+                  usedPercent={data.storage.usedPercent}
+                />
               </div>
-            ) : null}
-          </main>
-        </div>
+
+              <div className="xl:col-span-7">
+                <TopProcessesSection className="min-h-[310px]" processes={data.processes} />
+              </div>
+
+              <div className="xl:col-span-5">
+                <IssueLogsSection className="min-h-[310px]" issues={data.analysis.issues} />
+              </div>
+            </div>
+          ) : null}
+        </main>
       </div>
     </div>
   );

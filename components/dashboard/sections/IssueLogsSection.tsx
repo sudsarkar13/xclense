@@ -1,15 +1,18 @@
 import { Activity } from "lucide-react";
 
+import { cn } from "@/lib/utils";
+
 import { severityDotClass } from "@/components/dashboard/shared";
 import { type DashboardIssue } from "@/components/dashboard/types";
 
 interface IssueLogsSectionProps {
   issues: DashboardIssue[];
+  className?: string;
 }
 
-export function IssueLogsSection({ issues }: IssueLogsSectionProps): React.JSX.Element {
+export function IssueLogsSection({ issues, className }: IssueLogsSectionProps): React.JSX.Element {
   return (
-    <section className="rounded-xl border border-white/15 bg-white/5 p-4">
+    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
       <h2 className="flex items-center gap-2 text-xl font-semibold">
         <Activity className="h-4 w-4" /> Recent Process Logs
       </h2>

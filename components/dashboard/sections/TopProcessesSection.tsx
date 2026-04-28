@@ -1,14 +1,18 @@
 "use client";
+
+import { cn } from "@/lib/utils";
+
 import { processBarClass } from "@/components/dashboard/shared";
 import { type DashboardProcess } from "@/components/dashboard/types";
 
 interface TopProcessesSectionProps {
   processes: DashboardProcess[];
+  className?: string;
 }
 
-export function TopProcessesSection({ processes }: TopProcessesSectionProps): React.JSX.Element {
+export function TopProcessesSection({ processes, className }: TopProcessesSectionProps): React.JSX.Element {
   return (
-    <section className="rounded-xl border border-white/15 bg-white/5 p-4">
+    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
       <h2 className="text-xl font-semibold">Top Resource Consuming Apps</h2>
       <p className="text-xs text-zinc-400">by CPU &amp; Memory</p>
 
