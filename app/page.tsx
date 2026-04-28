@@ -1,83 +1,66 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { MemoryPressureCard } from "@/components/dashboard/cards/MemoryPressureCard";
+import { StorageOverviewCard } from "@/components/dashboard/cards/StorageOverviewCard";
+import { SystemHealthCard } from "@/components/dashboard/cards/SystemHealthCard";
+import { DashboardHeader } from "@/components/dashboard/layout/DashboardHeader";
+import { DashboardNav } from "@/components/dashboard/layout/DashboardNav";
+import { IssueLogsSection } from "@/components/dashboard/sections/IssueLogsSection";
+import { TopProcessesSection } from "@/components/dashboard/sections/TopProcessesSection";
 import {
   analyzeIssues,
+  getSystemHealth,
   isTauriRuntime,
+  listProcesses,
+  scanStorage,
   type AnalysisReport,
-  type IssueReport,
+  type ProcessInfo,
+  type StorageSummary,
+  type SystemHealth,
 } from "@/lib/tauri-client";
 
-type Severity = IssueReport["severity"];
-
-const SEVERITY_ORDER: Severity[] = ["critical", "warning", "info"];
-
-const severityClassMap: Record<Severity, string> = {
-  critical: "border-red-500/40 bg-red-50 text-red-900 dark:bg-red-950/30 dark:text-red-100",
-  warning:
-    "border-amber-500/40 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-100",
-  info: "border-blue-500/40 bg-blue-50 text-blue-900 dark:bg-blue-950/30 dark:text-blue-100",
+type DashboardData = {
+  analysis: AnalysisReport;
+  storage: StorageSummary;
+  health: SystemHealth;
+  processes: ProcessInfo[];
 };
 
-const severityBadgeMap: Record<Severity, string> = {
-  critical: "CRITICAL",
-  warning: "WARNING",
-  info: "INFO",
-};
-
-const actionLabelMap: Record<string, string> = {
-  run_storage_cleanup: "Run storage cleanup",
-  review_storage_usage: "Review storage usage",
-  reduce_memory_pressure: "Reduce memory pressure",
-  inspect_memory_consumers: "Inspect memory consumers",
-  review_process_candidates: "Review process candidates",
-};
-
-export default function Home() {
-  const [report, setReport] = useState<AnalysisReport | null>(null);
+export default function Home(): React.JSX.Element {
+  const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const groupedIssues = useMemo(() => {
-    if (!report) {
-      return {
-        critical: [] as IssueReport[],
-        warning: [] as IssueReport[],
-        info: [] as IssueReport[],
-      };
-    }
-
-    return report.issues.reduce(
-      (accumulator, issue) => {
-        accumulator[issue.severity].push(issue);
-        return accumulator;
-      },
-      {
-        critical: [] as IssueReport[],
-        warning: [] as IssueReport[],
-        info: [] as IssueReport[],
-      }
-    );
-  }, [report]);
-
-  const loadAnalysisReport = useCallback(async () => {
+  const loadDashboard = useCallback(async () => {
     if (!isTauriRuntime()) {
-      setErrorMessage(
-        "Tauri runtime is not available. Run this page inside the desktop app to view live diagnostics."
-      );
-      setReport(null);
+      setErrorMessage("Tauri runtime is not available. Open this page in the Xclense desktop app.");
+      setData(null);
       return;
     }
 
     try {
       setIsLoading(true);
       setErrorMessage(null);
-      const result = await analyzeIssues();
-      setReport(result);
+
+      const [analysis, storage, health, processes] = await Promise.all([
+        analyzeIssues(),
+        scanStorage(),
+        getSystemHealth(),
+        listProcesses(),
+      ]);
+
+      setData({
+        analysis,
+        storage,
+        health,
+        processes: processes.slice(0, 6),
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown diagnostics error";
-      setErrorMessage(`Failed to load diagnostics report: ${message}`);
-      setReport(null);
+      const message = error instanceof Error ? error.message : "Unknown dashboard error";
+      setErrorMessage(`Failed to load dashboard data: ${message}`);
+      setData(null);
     } finally {
       setIsLoading(false);
     }
@@ -85,104 +68,88 @@ export default function Home() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadAnalysisReport();
+      void loadDashboard();
     }, 0);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [loadAnalysisReport]);
+  }, [loadDashboard]);
+
+  const healthScore = useMemo(() => {
+    if (!data) return 0;
+
+    const criticalCount = data.analysis.issues.filter((issue) => issue.severity === "critical").length;
+    const warningCount = data.analysis.issues.filter((issue) => issue.severity === "warning").length;
+    const score = 100 - criticalCount * 25 - warningCount * 10;
+
+    return Math.max(20, Math.min(98, score));
+  }, [data]);
 
   return (
-    <div className="min-h-screen bg-zinc-50 px-4 py-8 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 sm:px-8">
-      <main className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <header className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Xclense Diagnostics</h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Phase 3 issue analysis output from Rust/Tauri telemetry.
-          </p>
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs sm:text-sm">
-            <button
-              type="button"
-              onClick={() => void loadAnalysisReport()}
-              className="rounded-md bg-zinc-900 px-3 py-2 font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-            >
-              Refresh Report
-            </button>
-            {report ? (
-              <span className="text-zinc-600 dark:text-zinc-300">
-                Total issues: <strong>{report.totalIssues}</strong>
-              </span>
-            ) : null}
-            {isLoading ? <span className="text-zinc-500">Loading…</span> : null}
-          </div>
-        </header>
+    <div className="h-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] p-3 text-zinc-100 md:p-4">
+      <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col rounded-2xl border border-white/20 bg-[#0d1226]/85 shadow-2xl backdrop-blur-xl">
+        <div className="border-b border-white/10 px-4 py-2.5 text-center text-xl font-semibold tracking-tight text-zinc-300 md:text-2xl">
+          Xclense - Dashboard
+        </div>
 
-        {errorMessage ? (
-          <section className="rounded-xl border border-red-500/40 bg-red-50 p-4 text-sm text-red-900 dark:bg-red-950/30 dark:text-red-100">
-            {errorMessage}
-          </section>
-        ) : null}
+        <div className="grid min-h-0 flex-1 grid-cols-12">
+          <DashboardNav />
 
-        {!errorMessage && !isLoading && report && report.totalIssues === 0 ? (
-          <section className="rounded-xl border border-emerald-500/40 bg-emerald-50 p-6 text-sm text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">
-            No active issues detected. System appears healthy with current heuristics.
-          </section>
-        ) : null}
+          <main className="col-span-12 min-h-0 overflow-auto p-3 md:col-span-9 lg:col-span-10 md:p-4">
+            <DashboardHeader isLoading={isLoading} onRefresh={() => void loadDashboard()} />
 
-        {SEVERITY_ORDER.map((severity) => {
-          const issues = groupedIssues[severity];
-          if (issues.length === 0) {
-            return null;
-          }
-
-          return (
-            <section key={severity} className="flex flex-col gap-4">
-              <h2 className="text-lg font-semibold tracking-tight">{severityBadgeMap[severity]}</h2>
-              <div className="grid gap-4 md:grid-cols-2">
-                {issues.map((issue) => (
-                  <article
-                    key={issue.id}
-                    className={`rounded-xl border p-5 shadow-sm ${severityClassMap[issue.severity]}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <h3 className="text-base font-semibold">{issue.title}</h3>
-                      <span className="rounded-md border border-current/30 px-2 py-1 text-[10px] font-bold tracking-wide">
-                        {severityBadgeMap[issue.severity]}
-                      </span>
-                    </div>
-
-                    <p className="mt-2 text-sm opacity-90">
-                      Confidence: <strong>{(issue.confidence * 100).toFixed(0)}%</strong>
-                    </p>
-
-                    <div className="mt-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide opacity-80">Evidence</p>
-                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
-                        {issue.evidence.map((line, index) => (
-                          <li key={`${issue.id}-evidence-${index}`}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div className="mt-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide opacity-80">Recommendation</p>
-                      <p className="mt-1 text-sm">{issue.recommendation}</p>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="mt-4 rounded-md border border-current/40 px-3 py-2 text-xs font-semibold transition hover:bg-black/5 dark:hover:bg-white/10"
-                    >
-                      {actionLabelMap[issue.suggestedAction] ?? issue.suggestedAction}
-                    </button>
-                  </article>
-                ))}
+            {errorMessage ? (
+              <div className="mb-3 rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-sm text-red-200">
+                {errorMessage}
               </div>
-            </section>
-          );
-        })}
-      </main>
+            ) : null}
+
+            {!data && !errorMessage ? (
+              <div className="rounded-lg border border-white/20 bg-white/5 p-4 text-sm text-zinc-300">
+                Waiting for diagnostics data...
+              </div>
+            ) : null}
+
+            {data ? (
+              <div className="grid gap-3 md:gap-4 xl:grid-cols-12">
+                <div className="xl:col-span-4">
+                  <SystemHealthCard
+                    score={healthScore}
+                    totalIssues={data.analysis.totalIssues}
+                    memoryUsedBytes={data.health.memoryUsedBytes}
+                    memoryFreeBytes={data.health.memoryFreeBytes}
+                  />
+                </div>
+
+                <div className="xl:col-span-4">
+                  <MemoryPressureCard
+                    pressurePercent={data.health.memoryPressurePercent}
+                    memoryUsedBytes={data.health.memoryUsedBytes}
+                    memoryFreeBytes={data.health.memoryFreeBytes}
+                  />
+                </div>
+
+                <div className="xl:col-span-4">
+                  <StorageOverviewCard
+                    totalBytes={data.storage.totalBytes}
+                    freeBytes={data.storage.freeBytes}
+                    usedPercent={data.storage.usedPercent}
+                  />
+                </div>
+
+                <div className="xl:col-span-7">
+                  <TopProcessesSection processes={data.processes} />
+                </div>
+
+                <div className="xl:col-span-5">
+                  <IssueLogsSection issues={data.analysis.issues} />
+                </div>
+              </div>
+            ) : null}
+          </main>
+        </div>
+      </div>
     </div>
   );
 }
