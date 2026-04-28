@@ -1,3 +1,4 @@
+"use client";
 import { processBarClass } from "@/components/dashboard/shared";
 import { type DashboardProcess } from "@/components/dashboard/types";
 
