@@ -1,36 +1,109 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Xclense
 
-## Getting Started
+Xclense is a macOS-focused advanced system utility application designed to help users manage storage, monitor applications/processes, understand RAM pressure, and maintain overall system health through actionable insights.
 
-First, run the development server:
+The project follows a dual-layer paradigm:
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Next.js App Router** for the visualization and interaction layer (UI shell)
+- **Rust + Tauri** for secure, performant system-level logic
+
+This separation keeps UI iteration fast while centralizing all privileged operations and system introspection in a strongly typed backend.
+
+## Product Goals
+
+Xclense is intended to provide:
+
+- Storage scanning and disk usage breakdowns
+- Process-level visibility (what is running and resource impact)
+- RAM and system health diagnostics
+- Recommendation reports with clear severity and evidence
+- Safe process control workflows (with safeguards and auditability)
+- Timely notifications for proactive maintenance
+
+## Architecture Overview
+
+## Frontend (Current)
+
+- Framework: Next.js (App Router)
+- UI Components: shadcn/ui-based component set
+- Responsibility: render dashboards, reports, tables, and user actions
+
+## Backend (Planned/In Progress)
+
+- Runtime: Tauri
+- Language: Rust
+- Responsibility: filesystem/process/system analysis and controlled action execution
+
+Planned Rust service domains:
+
+- `storage_service`
+- `process_service`
+- `health_service`
+- `report_service`
+- `notification_service`
+
+## Repository Layout (Current + Planned)
+
+```text
+xclense/
+├── app/                    # Next.js App Router UI shell
+├── components/             # UI components
+├── hooks/                  # Frontend hooks
+├── lib/                    # Frontend utilities
+├── shellscript/            # Existing macOS scan scripts (transition reference)
+├── plan.md                 # Product + technical execution roadmap
+└── src-tauri/              # Planned Rust + Tauri backend layer
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Development Status
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Current status is an early foundation stage:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Next.js frontend scaffold exists
+- Disk scan shell script exists at `shellscript/mac_disk_scanner.sh`
+- Full Rust/Tauri backend integration is the active build direction
 
-## Learn More
+## Roadmap Snapshot
 
-To learn more about Next.js, take a look at the following resources:
+Detailed breakdown is maintained in [`plan.md`](./plan.md). High-level phases:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Baseline docs and architecture alignment
+2. Tauri bootstrap and command bridge
+3. Read-only observability (storage, process, RAM)
+4. Analysis/reporting engine
+5. Safe control actions
+6. Notifications, hardening, and release readiness
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Local Development
 
-## Deploy on Vercel
+Use `yarn` as package manager for this repository.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+yarn install
+yarn dev
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The frontend shell runs on `http://localhost:3000` by default.
+
+## Logic Integration Direction
+
+As backend commands are introduced, the UI should consume only typed Tauri command responses for system data. Direct shell execution from React components is intentionally avoided to preserve safety, testability, and portability.
+
+## Safety Principles
+
+Because Xclense includes process management capabilities, backend logic will enforce safety controls:
+
+- protected process restrictions
+- explicit confirmation for high-risk actions
+- auditable action logs
+- transparent failure reasons for users
+
+## Next Step
+
+The immediate implementation target is to scaffold Tauri and expose the first three backend commands:
+
+- storage summary
+- process list snapshot
+- RAM/system health snapshot
+
+Once these are live, UI can be iterated rapidly against real runtime data.
