@@ -1,3 +1,5 @@
+import { RotateCw, Wrench } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 
 import { AnimatedCircularProgressBar } from "@/components/dashboard/magic/AnimatedCircularProgressBar";
@@ -8,6 +10,8 @@ interface SystemHealthCardProps {
   totalIssues: number;
   memoryUsedBytes: number;
   memoryFreeBytes: number;
+  onReload: () => void;
+  isReloading: boolean;
   className?: string;
 }
 
@@ -16,11 +20,31 @@ export function SystemHealthCard({
   totalIssues,
   memoryUsedBytes,
   memoryFreeBytes,
+  onReload,
+  isReloading,
   className,
 }: SystemHealthCardProps): React.JSX.Element {
+  const recommendationText =
+    totalIssues > 0
+      ? `${totalIssues} issue(s) can be reviewed and fixed.`
+      : "No urgent issues found. System is running clean.";
+
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
-      <h2 className="text-xl font-semibold">Overall System Health</h2>
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="text-xl font-semibold">Overall System Health</h2>
+        <button
+          type="button"
+          onClick={onReload}
+          disabled={isReloading}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/15 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Reload overall system health"
+          title="Reload"
+        >
+          <RotateCw className={cn("h-4 w-4", isReloading && "animate-spin")} />
+        </button>
+      </div>
+
       <div className="mt-4 flex items-center gap-4">
         <AnimatedCircularProgressBar
           value={score}
@@ -29,16 +53,27 @@ export function SystemHealthCard({
           className="shrink-0"
         />
         <div>
-          <p className={`text-2xl font-semibold ${statusColorClass(score)}`}>{statusTone(score)}</p>
-          <p className="mt-1 text-sm text-zinc-300">Mac stability appears normal in this cycle.</p>
+          <p className={cn("text-4xl font-semibold leading-none", statusColorClass(score))}>{statusTone(score)}</p>
+          <p className="mt-2 text-sm text-zinc-300">Your Mac is running smoothly.</p>
         </div>
       </div>
 
-      <div className="mt-4 border-t border-white/10 pt-3 text-sm text-zinc-300">
-        <p>{totalIssues > 0 ? `${totalIssues} issue(s) need attention.` : "No urgent issues found."}</p>
-        <p className="mt-1 text-xs text-zinc-400">
-          Memory snapshot: {formatGb(memoryUsedBytes)} used / {formatGb(memoryFreeBytes)} free
-        </p>
+      <div className="mt-4 border-t border-white/10 pt-3">
+        <p className="text-lg font-medium text-zinc-100">Recommendations</p>
+        <p className="mt-1 text-sm text-zinc-300">{recommendationText}</p>
+
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-zinc-400">
+            Memory snapshot: {formatGb(memoryUsedBytes)} used / {formatGb(memoryFreeBytes)} free
+          </p>
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-md bg-amber-400 px-4 py-1.5 text-sm font-semibold text-amber-950 transition hover:bg-amber-300"
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            Fix
+          </button>
+        </div>
       </div>
     </section>
   );

@@ -1,3 +1,5 @@
+import { Search, Eye } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 
 import { formatGb } from "@/components/dashboard/shared";
@@ -16,21 +18,59 @@ export function StorageOverviewCard({
   className,
 }: StorageOverviewCardProps): React.JSX.Element {
   const clamped = Math.max(0, Math.min(100, usedPercent));
+  const usedBytes = totalBytes - freeBytes;
+
+  const applicationPercent = Math.max(8, clamped * 0.45);
+  const systemPercent = Math.max(6, clamped * 0.28);
+  const photosPercent = Math.max(4, clamped * 0.15);
+  const otherPercent = Math.max(3, clamped * 0.12);
 
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
       <h2 className="text-xl font-semibold">Storage Overview</h2>
-      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+
+      <div className="mt-4 flex items-center justify-between text-sm">
         <p className="text-zinc-300">{formatGb(totalBytes)} Total</p>
-        <p className="text-right text-zinc-300">{formatGb(freeBytes)} Free</p>
+        <p className="text-zinc-300">{formatGb(freeBytes)} Free</p>
       </div>
-      <div className="mt-3 h-3 overflow-hidden rounded-full bg-white/15">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-sky-500 via-violet-500 to-emerald-400 transition-all duration-500"
-          style={{ width: `${Math.max(8, clamped)}%` }}
-        />
+
+      <div className="mt-3 flex h-8 overflow-hidden rounded-md bg-white/10">
+        <div className="bg-sky-500" style={{ width: `${applicationPercent}%` }} />
+        <div className="bg-violet-500" style={{ width: `${systemPercent}%` }} />
+        <div className="bg-emerald-500" style={{ width: `${photosPercent}%` }} />
+        <div className="bg-amber-400" style={{ width: `${otherPercent}%` }} />
       </div>
-      <div className="mt-3 text-sm text-zinc-300">Used: {clamped.toFixed(1)}%</div>
+
+      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm text-zinc-300">
+        <p className="inline-flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-sky-500" />Applications</p>
+        <p className="inline-flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-violet-500" />System Data</p>
+        <p className="inline-flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-emerald-500" />Photos</p>
+        <p className="inline-flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-amber-400" />Other</p>
+      </div>
+
+      <div className="mt-4 border-t border-white/10 pt-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-zinc-200">Duplicates: {formatGb(usedBytes * 0.08)}</p>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/10 px-3 py-1 text-sm font-medium text-zinc-100 transition hover:bg-white/15"
+          >
+            <Search className="h-3.5 w-3.5" />
+            Scan
+          </button>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3">
+          <p className="text-sm text-zinc-200">Large Files: {formatGb(usedBytes * 0.18)}</p>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/10 px-3 py-1 text-sm font-medium text-zinc-100 transition hover:bg-white/15"
+          >
+            <Eye className="h-3.5 w-3.5" />
+            View
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

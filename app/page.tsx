@@ -92,7 +92,7 @@ export default function Home(): React.JSX.Element {
         <DashboardNav />
 
         <main className="col-span-12 min-h-0 overflow-auto p-3 md:col-span-9 lg:col-span-10 md:p-4">
-          <DashboardHeader isLoading={isLoading} onRefresh={() => void loadDashboard()} />
+          <DashboardHeader />
 
           {errorMessage ? (
             <div className="mb-3 rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-sm text-red-200">
@@ -115,6 +115,8 @@ export default function Home(): React.JSX.Element {
                   totalIssues={data.analysis.totalIssues}
                   memoryUsedBytes={data.health.memoryUsedBytes}
                   memoryFreeBytes={data.health.memoryFreeBytes}
+                  onReload={() => void loadDashboard()}
+                  isReloading={isLoading}
                 />
               </div>
 
