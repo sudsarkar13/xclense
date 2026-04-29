@@ -20,17 +20,42 @@ export function MemoryPressureCard({
   className,
 }: MemoryPressureCardProps): React.JSX.Element {
   const clamped = Math.max(0, Math.min(100, pressurePercent));
-  const sweep = 220;
-  const start = 160;
-  const pointer = start + (clamped / 100) * sweep;
+
+  // Needle angle mapping: 0% => far-left of the arc, 100% => far-right of the arc.
+  // Base needle is drawn straight up, so we rotate from -90deg to +90deg.
+  const MIN_NEEDLE_ANGLE_DEG = -90;
+  const MAX_NEEDLE_ANGLE_DEG = 90;
+  const needleAngleDeg = MIN_NEEDLE_ANGLE_DEG + (clamped / 100) * (MAX_NEEDLE_ANGLE_DEG - MIN_NEEDLE_ANGLE_DEG);
 
   const activeSeries = trendSeries && trendSeries.length > 1 ? trendSeries : DEFAULT_SERIES;
 
-  const chartPoints = activeSeries.map((value, index) => {
-    const x = (index / (activeSeries.length - 1)) * 100;
-    const y = 100 - value;
-    return `${x},${y}`;
-  }).join(" ");
+  const smoothedSeries = activeSeries.map((value, index, values) => {
+    const previous = values[Math.max(0, index - 1)];
+    const current = value;
+    const next = values[Math.min(values.length - 1, index + 1)];
+    return (previous + current + next) / 3;
+  });
+
+  const rawChartPoints = activeSeries
+    .map((value, index) => {
+      const x = (index / (activeSeries.length - 1)) * 100;
+      const y = 100 - value;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const chartPoints = smoothedSeries
+    .map((value, index) => {
+      const x = (index / (smoothedSeries.length - 1)) * 100;
+      const y = 100 - value;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const latestX = 100;
+  const latestY = 100 - smoothedSeries[smoothedSeries.length - 1];
+
+  const pressureTone = clamped < 60 ? "Low" : clamped < 80 ? "Moderate" : "High";
 
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-2", className)}>
@@ -58,7 +83,13 @@ export function MemoryPressureCard({
             <path d="M95 30 A100 100 0 0 1 165 30" stroke="url(#ram-mid)" strokeWidth="16" fill="none" strokeLinecap="round" />
             <path d="M165 30 A100 100 0 0 1 230 120" stroke="url(#ram-high)" strokeWidth="16" fill="none" strokeLinecap="round" />
 
-            <g transform={`rotate(${pointer} 130 120)`}>
+            <g
+              style={{
+                transform: `rotate(${needleAngleDeg}deg)`,
+                transformOrigin: "130px 120px",
+                transition: "transform 700ms cubic-bezier(0.22, 1, 0.36, 1)",
+              }}
+            >
               <rect x="127" y="34" width="6" height="88" rx="3" fill="#e5e7eb" />
             </g>
             <circle cx="130" cy="120" r="6" fill="#e5e7eb" />
@@ -66,7 +97,7 @@ export function MemoryPressureCard({
         </div>
 
         <p className="-mt-1 text-3xl font-semibold leading-none">{clamped.toFixed(0)}%</p>
-        <p className="mt-0.5 text-base text-emerald-300">{clamped < 80 ? "(Good)" : "(High)"}</p>
+        <p className="mt-0.5 text-base text-emerald-300">({pressureTone})</p>
         <p className="mt-0.5 text-xs text-zinc-300">
           Available: {formatGb(memoryFreeBytes)}, Used: {formatGb(memoryUsedBytes)}
         </p>
@@ -74,8 +105,16 @@ export function MemoryPressureCard({
 
       <div className="mt-1 rounded-md border border-white/10 bg-cyan-500/5 p-1">
         <svg viewBox="0 0 100 100" className="h-10 w-full" preserveAspectRatio="none">
-          <polyline fill="none" stroke="#34d399" strokeWidth="2.5" points={chartPoints} />
+          <line x1="0" y1="25" x2="100" y2="25" stroke="rgba(148, 163, 184, 0.2)" strokeWidth="0.8" />
+          <line x1="0" y1="50" x2="100" y2="50" stroke="rgba(148, 163, 184, 0.2)" strokeWidth="0.8" />
+          <line x1="0" y1="75" x2="100" y2="75" stroke="rgba(148, 163, 184, 0.2)" strokeWidth="0.8" />
+
+          <polyline fill="none" stroke="rgba(52, 211, 153, 0.35)" strokeWidth="1.5" points={rawChartPoints} />
+          <polyline fill="none" stroke="#34d399" strokeWidth="2.5" points={chartPoints} className="drop-shadow-[0_0_5px_rgba(52,211,153,0.45)]" />
           <polygon points={`0,100 ${chartPoints} 100,100`} fill="rgba(52, 211, 153, 0.15)" />
+
+          <circle cx={latestX} cy={latestY} r="2.3" fill="#10b981" />
+          <circle cx={latestX} cy={latestY} r="4" fill="rgba(16,185,129,0.3)" className="animate-ping" />
         </svg>
         <div className="mt-0.5 flex items-center justify-between text-[11px] text-zinc-400">
           <span>Last</span>
