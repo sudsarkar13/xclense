@@ -13,7 +13,7 @@ interface TopProcessesSectionProps {
 export function TopProcessesSection({ processes, className }: TopProcessesSectionProps): React.JSX.Element {
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
-      <h2 className="text-xl font-semibold">Top Resource Consuming Apps</h2>
+      <h2 className="text-xs font-semibold">Top Resource Consuming Apps</h2>
       <p className="text-xs text-zinc-400">by CPU &amp; Memory</p>
 
       <div className="mt-3 space-y-2.5">

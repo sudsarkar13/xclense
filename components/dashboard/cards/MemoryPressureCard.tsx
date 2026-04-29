@@ -6,15 +6,17 @@ interface MemoryPressureCardProps {
   pressurePercent: number;
   memoryUsedBytes: number;
   memoryFreeBytes: number;
+  trendSeries?: number[];
   className?: string;
 }
 
-const SERIES = [35, 33, 32, 32, 31, 31, 33, 34, 33, 32, 35, 38, 36, 39, 44, 48, 46, 43, 45, 47, 52, 55, 49, 46, 44, 48, 50, 51, 49, 47];
+const DEFAULT_SERIES = [35, 33, 32, 32, 31, 31, 33, 34, 33, 32, 35, 38, 36, 39, 44, 48, 46, 43, 45, 47, 52, 55, 49, 46, 44, 48, 50, 51, 49, 47];
 
 export function MemoryPressureCard({
   pressurePercent,
   memoryUsedBytes,
   memoryFreeBytes,
+  trendSeries,
   className,
 }: MemoryPressureCardProps): React.JSX.Element {
   const clamped = Math.max(0, Math.min(100, pressurePercent));
@@ -22,18 +24,20 @@ export function MemoryPressureCard({
   const start = 160;
   const pointer = start + (clamped / 100) * sweep;
 
-  const chartPoints = SERIES.map((value, index) => {
-    const x = (index / (SERIES.length - 1)) * 100;
+  const activeSeries = trendSeries && trendSeries.length > 1 ? trendSeries : DEFAULT_SERIES;
+
+  const chartPoints = activeSeries.map((value, index) => {
+    const x = (index / (activeSeries.length - 1)) * 100;
     const y = 100 - value;
     return `${x},${y}`;
   }).join(" ");
 
   return (
-    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-3", className)}>
-      <h2 className="text-lg font-semibold">RAM Usage</h2>
+    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-2", className)}>
+      <h2 className="text-xs font-semibold">RAM Usage</h2>
 
-      <div className="mt-3 flex flex-col items-center">
-        <div className="relative h-28 w-56">
+      <div className="mt-2 flex flex-col items-center">
+        <div className="relative h-24 w-52">
           <svg viewBox="0 0 260 150" className="h-full w-full">
             <defs>
               <linearGradient id="ram-good" x1="0" x2="1">
@@ -68,8 +72,8 @@ export function MemoryPressureCard({
         </p>
       </div>
 
-      <div className="mt-2 rounded-md border border-white/10 bg-cyan-500/5 p-1.5">
-        <svg viewBox="0 0 100 100" className="h-12 w-full" preserveAspectRatio="none">
+      <div className="mt-1 rounded-md border border-white/10 bg-cyan-500/5 p-1">
+        <svg viewBox="0 0 100 100" className="h-10 w-full" preserveAspectRatio="none">
           <polyline fill="none" stroke="#34d399" strokeWidth="2.5" points={chartPoints} />
           <polygon points={`0,100 ${chartPoints} 100,100`} fill="rgba(52, 211, 153, 0.15)" />
         </svg>

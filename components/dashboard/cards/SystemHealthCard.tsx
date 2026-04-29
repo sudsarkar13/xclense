@@ -30,9 +30,9 @@ export function SystemHealthCard({
       : "No urgent issues found. System is running clean.";
 
   return (
-    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-3", className)}>
-      <div className="flex items-start justify-between gap-3">
-        <h2 className="text-lg font-semibold">Overall System Health</h2>
+    <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-2", className)}>
+      <div className="flex items-start justify-between gap-2.5">
+        <h2 className="text-xs font-semibold">Overall System Health</h2>
         <button
           type="button"
           onClick={onReload}
@@ -45,7 +45,7 @@ export function SystemHealthCard({
         </button>
       </div>
 
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-2 flex items-center gap-2">
         <AnimatedCircularProgressBar
           value={score}
           gaugePrimaryColor="rgb(6 182 212)"
@@ -53,17 +53,17 @@ export function SystemHealthCard({
           className="w-20 shrink-0 text-xl"
         />
         <div>
-          <p className={cn("text-3xl font-semibold leading-none", statusColorClass(score))}>{statusTone(score)}</p>
+          <p className={cn("text-2xl font-semibold leading-none", statusColorClass(score))}>{statusTone(score)}</p>
           <p className="mt-1 text-xs text-zinc-300">Your Mac is running smoothly.</p>
         </div>
       </div>
 
-      <div className="mt-3 border-t border-white/10 pt-2">
-        <p className="text-base font-medium text-zinc-100">Recommendations</p>
-        <p className="mt-0.5 text-xs text-zinc-300">{recommendationText}</p>
+      <div className="mt-2 border-t border-white/10 pt-1">
+        <p className="text-sm font-medium text-zinc-100">Recommendations</p>
+        <p className="mt-0.5 text-[11px] text-zinc-300">{recommendationText}</p>
 
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <p className="text-[11px] text-zinc-400">
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <p className="text-xs text-zinc-300">
             Memory snapshot: {formatGb(memoryUsedBytes)} used / {formatGb(memoryFreeBytes)} free
           </p>
           <button

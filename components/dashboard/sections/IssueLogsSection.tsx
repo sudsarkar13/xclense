@@ -13,7 +13,7 @@ interface IssueLogsSectionProps {
 export function IssueLogsSection({ issues, className }: IssueLogsSectionProps): React.JSX.Element {
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-4", className)}>
-      <h2 className="flex items-center gap-2 text-xl font-semibold">
+      <h2 className="flex items-center gap-2 text-xs font-semibold">
         <Activity className="h-4 w-4" /> Recent Process Logs
       </h2>
 

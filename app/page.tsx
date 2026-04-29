@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MemoryPressureCard } from "@/components/dashboard/cards/MemoryPressureCard";
 import { StorageOverviewCard } from "@/components/dashboard/cards/StorageOverviewCard";
@@ -21,70 +21,141 @@ import {
   type SystemHealth,
 } from "@/lib/tauri-client";
 
-type DashboardData = {
+type CheckpointData = {
   analysis: AnalysisReport;
+  health: SystemHealth;
+};
+
+type RealtimeData = {
   storage: StorageSummary;
   health: SystemHealth;
   processes: ProcessInfo[];
+  issues: AnalysisReport["issues"];
 };
 
 export default function Home(): React.JSX.Element {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [checkpointData, setCheckpointData] = useState<CheckpointData | null>(null);
+  const [realtimeData, setRealtimeData] = useState<RealtimeData | null>(null);
+  const [memoryTrend, setMemoryTrend] = useState<number[]>([]);
+  const [isCheckpointLoading, setIsCheckpointLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isRealtimeLoadingRef = useRef<boolean>(false);
 
-  const loadDashboard = useCallback(async () => {
+  const appendMemoryTrend = useCallback((value: number) => {
+    const nextValue = Math.max(0, Math.min(100, value));
+    setMemoryTrend((previous) => {
+      const updated = [...previous, nextValue];
+      return updated.slice(-30);
+    });
+  }, []);
+
+  const loadCheckpointData = useCallback(async () => {
     if (!isTauriRuntime()) {
       setErrorMessage("Tauri runtime is not available. Open this page in the Xclense desktop app.");
-      setData(null);
+      setCheckpointData(null);
       return;
     }
 
     try {
-      setIsLoading(true);
+      setIsCheckpointLoading(true);
       setErrorMessage(null);
 
-      const [analysis, storage, health, processes] = await Promise.all([
-        analyzeIssues(),
+      const [analysis, health] = await Promise.all([analyzeIssues(), getSystemHealth()]);
+
+      setCheckpointData({ analysis, health });
+      appendMemoryTrend(health.memoryPressurePercent);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown dashboard error";
+      setErrorMessage(`Failed to load checkpoint data: ${message}`);
+      setCheckpointData(null);
+    } finally {
+      setIsCheckpointLoading(false);
+    }
+  }, [appendMemoryTrend]);
+
+  const loadRealtimeData = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    if (isRealtimeLoadingRef.current) {
+      return;
+    }
+
+    try {
+      isRealtimeLoadingRef.current = true;
+      setErrorMessage(null);
+
+      const [storage, health, processes, analysis] = await Promise.all([
         scanStorage(),
         getSystemHealth(),
         listProcesses(),
+        analyzeIssues(),
       ]);
 
-      setData({
-        analysis,
+      setRealtimeData({
         storage,
         health,
         processes: processes.slice(0, 6),
+        issues: analysis.issues,
       });
+
+      appendMemoryTrend(health.memoryPressurePercent);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown dashboard error";
-      setErrorMessage(`Failed to load dashboard data: ${message}`);
-      setData(null);
+      const message = error instanceof Error ? error.message : "Unknown realtime dashboard error";
+      setErrorMessage(`Failed to load realtime dashboard data: ${message}`);
     } finally {
-      setIsLoading(false);
+      isRealtimeLoadingRef.current = false;
     }
-  }, []);
+  }, [appendMemoryTrend]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadDashboard();
+      void loadCheckpointData();
+      void loadRealtimeData();
     }, 0);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [loadDashboard]);
+  }, [loadCheckpointData, loadRealtimeData]);
+
+  useEffect(() => {
+    const POLL_INTERVAL_MS = 3000;
+
+    const poll = (): void => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      void loadRealtimeData();
+    };
+
+    const intervalId = window.setInterval(poll, POLL_INTERVAL_MS);
+
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === "visible") {
+        void loadRealtimeData();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [loadRealtimeData]);
 
   const healthScore = useMemo(() => {
-    if (!data) return 0;
+    if (!checkpointData) return 0;
 
-    const criticalCount = data.analysis.issues.filter((issue) => issue.severity === "critical").length;
-    const warningCount = data.analysis.issues.filter((issue) => issue.severity === "warning").length;
+    const criticalCount = checkpointData.analysis.issues.filter((issue) => issue.severity === "critical").length;
+    const warningCount = checkpointData.analysis.issues.filter((issue) => issue.severity === "warning").length;
     const score = 100 - criticalCount * 25 - warningCount * 10;
 
     return Math.max(20, Math.min(98, score));
-  }, [data]);
+  }, [checkpointData]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] font-sans text-zinc-100">
@@ -100,50 +171,51 @@ export default function Home(): React.JSX.Element {
             </div>
           ) : null}
 
-          {!data && !errorMessage ? (
+          {!checkpointData && !realtimeData && !errorMessage ? (
             <div className="rounded-lg border border-white/20 bg-white/5 p-4 text-sm text-zinc-300">
               Waiting for diagnostics data...
             </div>
           ) : null}
 
-          {data ? (
-            <div className="grid auto-rows-fr gap-3 md:gap-4 xl:grid-cols-12">
+          {checkpointData && realtimeData ? (
+            <div className="grid gap-3 md:gap-4 xl:grid-cols-12">
               <div className="xl:col-span-4">
                 <SystemHealthCard
-                  className="min-h-[250px]"
+                  className="min-h-[175px]"
                   score={healthScore}
-                  totalIssues={data.analysis.totalIssues}
-                  memoryUsedBytes={data.health.memoryUsedBytes}
-                  memoryFreeBytes={data.health.memoryFreeBytes}
-                  onReload={() => void loadDashboard()}
-                  isReloading={isLoading}
+                  totalIssues={checkpointData.analysis.totalIssues}
+                  memoryUsedBytes={checkpointData.health.memoryUsedBytes}
+                  memoryFreeBytes={checkpointData.health.memoryFreeBytes}
+                  onReload={() => void loadCheckpointData()}
+                  isReloading={isCheckpointLoading}
                 />
               </div>
 
               <div className="xl:col-span-4">
                 <MemoryPressureCard
-                  className="min-h-[250px]"
-                  pressurePercent={data.health.memoryPressurePercent}
-                  memoryUsedBytes={data.health.memoryUsedBytes}
-                  memoryFreeBytes={data.health.memoryFreeBytes}
+                  className="min-h-[175px]"
+                  pressurePercent={realtimeData.health.memoryPressurePercent}
+                  memoryUsedBytes={realtimeData.health.memoryUsedBytes}
+                  memoryFreeBytes={realtimeData.health.memoryFreeBytes}
+                  trendSeries={memoryTrend}
                 />
               </div>
 
               <div className="xl:col-span-4">
                 <StorageOverviewCard
-                  className="min-h-[250px]"
-                  totalBytes={data.storage.totalBytes}
-                  freeBytes={data.storage.freeBytes}
-                  usedPercent={data.storage.usedPercent}
+                  className="min-h-[175px]"
+                  totalBytes={realtimeData.storage.totalBytes}
+                  freeBytes={realtimeData.storage.freeBytes}
+                  usedPercent={realtimeData.storage.usedPercent}
                 />
               </div>
 
               <div className="xl:col-span-7">
-                <TopProcessesSection className="min-h-[310px]" processes={data.processes} />
+                <TopProcessesSection className="min-h-[310px]" processes={realtimeData.processes} />
               </div>
 
               <div className="xl:col-span-5">
-                <IssueLogsSection className="min-h-[310px]" issues={data.analysis.issues} />
+                <IssueLogsSection className="min-h-[310px]" issues={realtimeData.issues} />
               </div>
             </div>
           ) : null}
