@@ -1,6 +1,9 @@
+import { CircleHelp } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 
 import { formatGb } from "@/components/dashboard/shared";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
 interface MemoryPressureCardProps {
   pressurePercent: number;
@@ -59,7 +62,27 @@ export function MemoryPressureCard({
 
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-2", className)}>
-      <h2 className="text-xs font-semibold">RAM Usage</h2>
+      <div className="inline-flex items-center gap-1.5">
+        <h2 className="text-xs font-semibold">RAM Usage</h2>
+        <HoverCard openDelay={120} closeDelay={80}>
+          <HoverCardTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/20 bg-white/5 text-zinc-300 transition hover:bg-white/10 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60"
+              aria-label="What this RAM usage card shows"
+            >
+              <CircleHelp className="h-3.5 w-3.5" />
+            </button>
+          </HoverCardTrigger>
+          <HoverCardContent align="start" className="w-72 border border-white/15 bg-zinc-900/95 text-zinc-100">
+            <p className="text-xs font-semibold">RAM Usage</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
+              This widget visualizes current memory pressure and the recent trend. Lower pressure is healthier,
+              while sustained high pressure can signal heavy apps or background load that may need cleanup.
+            </p>
+          </HoverCardContent>
+        </HoverCard>
+      </div>
 
       <div className="mt-2 flex flex-col items-center">
         <div className="relative h-24 w-52">

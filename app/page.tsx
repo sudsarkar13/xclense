@@ -147,15 +147,35 @@ export default function Home(): React.JSX.Element {
     };
   }, [loadRealtimeData]);
 
+  const severityCounts = useMemo(() => {
+    if (!checkpointData) {
+      return {
+        critical: 0,
+        warning: 0,
+        info: 0,
+      };
+    }
+
+    return checkpointData.analysis.issues.reduce(
+      (accumulator, issue) => {
+        accumulator[issue.severity] += 1;
+        return accumulator;
+      },
+      {
+        critical: 0,
+        warning: 0,
+        info: 0,
+      },
+    );
+  }, [checkpointData]);
+
   const healthScore = useMemo(() => {
     if (!checkpointData) return 0;
 
-    const criticalCount = checkpointData.analysis.issues.filter((issue) => issue.severity === "critical").length;
-    const warningCount = checkpointData.analysis.issues.filter((issue) => issue.severity === "warning").length;
-    const score = 100 - criticalCount * 25 - warningCount * 10;
+    const score = 100 - severityCounts.critical * 25 - severityCounts.warning * 10;
 
     return Math.max(20, Math.min(98, score));
-  }, [checkpointData]);
+  }, [checkpointData, severityCounts.critical, severityCounts.warning]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] font-sans text-zinc-100">
@@ -184,8 +204,18 @@ export default function Home(): React.JSX.Element {
                   className="min-h-[175px]"
                   score={healthScore}
                   totalIssues={checkpointData.analysis.totalIssues}
+                  memoryTotalBytes={checkpointData.health.memoryTotalBytes}
                   memoryUsedBytes={checkpointData.health.memoryUsedBytes}
                   memoryFreeBytes={checkpointData.health.memoryFreeBytes}
+                  memoryPressurePercent={checkpointData.health.memoryPressurePercent}
+                  loadAverage1m={checkpointData.health.loadAverage1m}
+                  loadAverage5m={checkpointData.health.loadAverage5m}
+                  loadAverage15m={checkpointData.health.loadAverage15m}
+                  lastCheckpointEpochMs={checkpointData.health.scannedAtEpochMs}
+                  criticalCount={severityCounts.critical}
+                  warningCount={severityCounts.warning}
+                  infoCount={severityCounts.info}
+                  autoRefreshSeconds={3}
                   onReload={() => void loadCheckpointData()}
                   isReloading={isCheckpointLoading}
                 />
@@ -211,11 +241,11 @@ export default function Home(): React.JSX.Element {
               </div>
 
               <div className="xl:col-span-7">
-                <TopProcessesSection className="min-h-[310px]" processes={realtimeData.processes} />
+                <TopProcessesSection className="min-h-[420px]" processes={realtimeData.processes} />
               </div>
 
               <div className="xl:col-span-5">
-                <IssueLogsSection className="min-h-[310px]" issues={realtimeData.issues} />
+                <IssueLogsSection className="min-h-[420px]" issues={realtimeData.issues} />
               </div>
             </div>
           ) : null}

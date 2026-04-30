@@ -1,8 +1,9 @@
-import { Search, Eye } from "lucide-react";
+import { CircleHelp, Eye, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 import { formatGb } from "@/components/dashboard/shared";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
 interface StorageOverviewCardProps {
   totalBytes: number;
@@ -27,7 +28,27 @@ export function StorageOverviewCard({
 
   return (
     <section className={cn("h-full rounded-xl border border-white/15 bg-white/5 p-2", className)}>
-      <h2 className="text-xs font-semibold">Storage Overview</h2>
+      <div className="inline-flex items-center gap-1.5">
+        <h2 className="text-xs font-semibold">Storage Overview</h2>
+        <HoverCard openDelay={120} closeDelay={80}>
+          <HoverCardTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/20 bg-white/5 text-zinc-300 transition hover:bg-white/10 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60"
+              aria-label="What this storage overview card shows"
+            >
+              <CircleHelp className="h-3.5 w-3.5" />
+            </button>
+          </HoverCardTrigger>
+          <HoverCardContent align="start" className="w-72 border border-white/15 bg-zinc-900/95 text-zinc-100">
+            <p className="text-xs font-semibold">Storage Overview</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
+              This widget summarizes used versus free disk space and estimates category distribution.
+              Use Scan and View actions to locate duplicate or large files when usage grows too high.
+            </p>
+          </HoverCardContent>
+        </HoverCard>
+      </div>
 
       <div className="mt-2 flex items-center justify-between text-xs">
         <p className="text-zinc-300">{formatGb(totalBytes)} Total</p>
