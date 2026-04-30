@@ -33,10 +33,12 @@ export interface SystemHealth {
   scannedAtEpochMs: number;
 }
 
+export type SeverityLevel = "critical" | "warning" | "info";
+
 export interface IssueReport {
   id: string;
   title: string;
-  severity: "critical" | "warning" | "info";
+  severity: SeverityLevel;
   confidence: number;
   evidence: string[];
   recommendation: string;
@@ -47,6 +49,26 @@ export interface AnalysisReport {
   generatedAtEpochMs: number;
   totalIssues: number;
   issues: IssueReport[];
+}
+
+export interface ReportSnapshotMeta {
+  snapshotId: string;
+  createdAtEpochMs: number;
+  issueCount: number;
+  highestSeverity: SeverityLevel | "none";
+  sourceVersion: string;
+}
+
+export interface ReportSnapshot {
+  meta: ReportSnapshotMeta;
+  report: AnalysisReport;
+}
+
+export interface ExportResult {
+  snapshotId: string;
+  format: "json" | "txt";
+  exportedAtEpochMs: number;
+  filePath: string;
 }
 
 /**
@@ -96,4 +118,42 @@ export const getSystemHealth = async (): Promise<SystemHealth> => {
 export const analyzeIssues = async (): Promise<AnalysisReport> => {
   ensureTauriRuntime();
   return invoke<AnalysisReport>("analyze_issues");
+};
+
+export const createReportSnapshot = async (
+  report?: AnalysisReport,
+): Promise<ReportSnapshotMeta> => {
+  ensureTauriRuntime();
+  return invoke<ReportSnapshotMeta>("create_report_snapshot", {
+    report,
+  });
+};
+
+export const listReportSnapshots = async (
+  limit?: number,
+): Promise<ReportSnapshotMeta[]> => {
+  ensureTauriRuntime();
+  return invoke<ReportSnapshotMeta[]>("list_report_snapshots", {
+    limit,
+  });
+};
+
+export const getReportSnapshot = async (
+  snapshotId: string,
+): Promise<ReportSnapshot> => {
+  ensureTauriRuntime();
+  return invoke<ReportSnapshot>("get_report_snapshot", {
+    snapshotId,
+  });
+};
+
+export const exportReportSnapshot = async (
+  snapshotId: string,
+  format: "json" | "txt",
+): Promise<ExportResult> => {
+  ensureTauriRuntime();
+  return invoke<ExportResult>("export_report_snapshot", {
+    snapshotId,
+    format,
+  });
 };

@@ -1,6 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,7 +14,7 @@ pub struct PingResponse {
   pub version: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageSummary {
   pub total_bytes: u64,
@@ -20,7 +24,7 @@ pub struct StorageSummary {
   pub scanned_at_epoch_ms: u128,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessInfo {
   pub pid: i32,
@@ -30,7 +34,7 @@ pub struct ProcessInfo {
   pub state: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemHealth {
   pub memory_total_bytes: u64,
@@ -43,7 +47,7 @@ pub struct SystemHealth {
   pub scanned_at_epoch_ms: u128,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueReport {
   pub id: String,
@@ -55,7 +59,7 @@ pub struct IssueReport {
   pub suggested_action: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisReport {
   pub generated_at_epoch_ms: u128,
@@ -63,8 +67,36 @@ pub struct AnalysisReport {
   pub issues: Vec<IssueReport>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSnapshotMeta {
+  pub snapshot_id: String,
+  pub created_at_epoch_ms: u128,
+  pub issue_count: usize,
+  pub highest_severity: String,
+  pub source_version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSnapshot {
+  pub meta: ReportSnapshotMeta,
+  pub report: AnalysisReport,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+  pub snapshot_id: String,
+  pub format: String,
+  pub exported_at_epoch_ms: u128,
+  pub file_path: String,
+}
+
 mod commands {
   use super::*;
+
+  const MAX_SNAPSHOT_COUNT: usize = 100;
 
   fn now_epoch_ms() -> u128 {
     SystemTime::now()
@@ -105,6 +137,165 @@ mod commands {
       .trim()
       .parse::<f64>()
       .map_err(|error| format!("failed to parse f64 '{}': {}", value, error))
+  }
+
+  fn ensure_directory(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path)
+      .map_err(|error| format!("failed to create directory '{}': {}", path.display(), error))
+  }
+
+  fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let temp_path = path.with_extension("tmp");
+    let serialized = serde_json::to_vec_pretty(value)
+      .map_err(|error| format!("failed to serialize json: {}", error))?;
+
+    {
+      let mut temp_file = fs::File::create(&temp_path)
+        .map_err(|error| format!("failed to create temp file '{}': {}", temp_path.display(), error))?;
+      temp_file
+        .write_all(&serialized)
+        .map_err(|error| format!("failed to write temp file '{}': {}", temp_path.display(), error))?;
+      temp_file
+        .sync_all()
+        .map_err(|error| format!("failed to sync temp file '{}': {}", temp_path.display(), error))?;
+    }
+
+    fs::rename(&temp_path, path)
+      .map_err(|error| format!("failed to finalize file '{}': {}", path.display(), error))
+  }
+
+  fn snapshots_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+      .path()
+      .app_data_dir()
+      .map_err(|error| format!("failed to resolve app data directory: {}", error))?;
+
+    let path = app_data.join("report-snapshots");
+    ensure_directory(&path)?;
+    Ok(path)
+  }
+
+  fn exports_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+      .path()
+      .app_data_dir()
+      .map_err(|error| format!("failed to resolve app data directory: {}", error))?;
+
+    let path = app_data.join("report-exports");
+    ensure_directory(&path)?;
+    Ok(path)
+  }
+
+  fn snapshot_file_path(app: &tauri::AppHandle, snapshot_id: &str) -> Result<PathBuf, String> {
+    let dir = snapshots_dir(app)?;
+    Ok(dir.join(format!("{}.json", snapshot_id)))
+  }
+
+  fn read_snapshot(path: &Path) -> Result<ReportSnapshot, String> {
+    let content = fs::read_to_string(path)
+      .map_err(|error| format!("failed to read snapshot file '{}': {}", path.display(), error))?;
+
+    serde_json::from_str::<ReportSnapshot>(&content).map_err(|error| {
+      format!(
+        "failed to parse snapshot json from '{}': {}",
+        path.display(),
+        error
+      )
+    })
+  }
+
+  fn severity_rank(severity: &str) -> i32 {
+    match severity {
+      "critical" => 3,
+      "warning" => 2,
+      "info" => 1,
+      _ => 0,
+    }
+  }
+
+  fn highest_severity(issues: &[IssueReport]) -> String {
+    if issues.iter().any(|issue| issue.severity == "critical") {
+      return "critical".to_string();
+    }
+
+    if issues.iter().any(|issue| issue.severity == "warning") {
+      return "warning".to_string();
+    }
+
+    if issues.iter().any(|issue| issue.severity == "info") {
+      return "info".to_string();
+    }
+
+    "none".to_string()
+  }
+
+  fn enforce_snapshot_retention(app: &tauri::AppHandle) -> Result<(), String> {
+    let directory = snapshots_dir(app)?;
+    let entries = fs::read_dir(&directory)
+      .map_err(|error| format!("failed to read snapshots directory '{}': {}", directory.display(), error))?;
+
+    let mut metas: Vec<ReportSnapshotMeta> = Vec::new();
+
+    for entry_result in entries {
+      let entry = match entry_result {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+
+      let path = entry.path();
+      if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+        continue;
+      }
+
+      if let Ok(snapshot) = read_snapshot(&path) {
+        metas.push(snapshot.meta);
+      }
+    }
+
+    metas.sort_by(|a, b| b.created_at_epoch_ms.cmp(&a.created_at_epoch_ms));
+
+    for stale_meta in metas.iter().skip(MAX_SNAPSHOT_COUNT) {
+      let stale_path = directory.join(format!("{}.json", stale_meta.snapshot_id));
+      if stale_path.exists() {
+        let _ = fs::remove_file(stale_path);
+      }
+    }
+
+    Ok(())
+  }
+
+  fn build_plain_text_report(snapshot: &ReportSnapshot) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push("Xclense Analysis Snapshot".to_string());
+    lines.push(format!("Snapshot ID: {}", snapshot.meta.snapshot_id));
+    lines.push(format!("Created At (epoch ms): {}", snapshot.meta.created_at_epoch_ms));
+    lines.push(format!("Issue Count: {}", snapshot.meta.issue_count));
+    lines.push(format!("Highest Severity: {}", snapshot.meta.highest_severity));
+    lines.push(format!("Source Version: {}", snapshot.meta.source_version));
+    lines.push(String::new());
+
+    if snapshot.report.issues.is_empty() {
+      lines.push("No issues detected in this snapshot.".to_string());
+    } else {
+      lines.push("Issues:".to_string());
+      for issue in &snapshot.report.issues {
+        lines.push(format!("- [{}] {} (confidence: {:.2})", issue.severity.to_uppercase(), issue.title, issue.confidence));
+        lines.push(format!("  Recommendation: {}", issue.recommendation));
+        lines.push(format!("  Suggested Action: {}", issue.suggested_action));
+
+        if !issue.evidence.is_empty() {
+          lines.push("  Evidence:".to_string());
+          for item in &issue.evidence {
+            lines.push(format!("    - {}", item));
+          }
+        }
+
+        lines.push(String::new());
+      }
+    }
+
+    lines.join("\n")
   }
 
   #[tauri::command]
@@ -336,11 +527,20 @@ mod commands {
         })
         .collect();
 
+      let severity = if heavy_processes
+        .iter()
+        .any(|process| process.cpu_percent >= 90.0 || process.memory_percent >= 45.0)
+      {
+        "warning"
+      } else {
+        "info"
+      };
+
       issues.push(IssueReport {
         id: "process-hotspots-001".to_string(),
         title: "Resource-heavy active processes".to_string(),
-        severity: "info".to_string(),
-        confidence: 0.82,
+        severity: severity.to_string(),
+        confidence: if severity == "warning" { 0.86 } else { 0.82 },
         evidence,
         recommendation:
           "Review listed processes and terminate only non-critical workloads with sustained high usage."
@@ -355,6 +555,127 @@ mod commands {
       issues,
     })
   }
+
+  #[tauri::command]
+  pub fn create_report_snapshot(
+    app: tauri::AppHandle,
+    report: Option<AnalysisReport>,
+  ) -> Result<ReportSnapshotMeta, String> {
+    let report_data = match report {
+      Some(value) => value,
+      None => analyze_issues()?,
+    };
+
+    let created_at_epoch_ms = now_epoch_ms();
+    let snapshot_id = format!("rs-{}-{}", created_at_epoch_ms, report_data.total_issues);
+
+    let meta = ReportSnapshotMeta {
+      snapshot_id: snapshot_id.clone(),
+      created_at_epoch_ms,
+      issue_count: report_data.total_issues,
+      highest_severity: highest_severity(&report_data.issues),
+      source_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+
+    let snapshot = ReportSnapshot {
+      meta: meta.clone(),
+      report: report_data,
+    };
+
+    let path = snapshot_file_path(&app, &snapshot_id)?;
+    write_json_atomic(&path, &snapshot)?;
+    enforce_snapshot_retention(&app)?;
+
+    Ok(meta)
+  }
+
+  #[tauri::command]
+  pub fn list_report_snapshots(
+    app: tauri::AppHandle,
+    limit: Option<usize>,
+  ) -> Result<Vec<ReportSnapshotMeta>, String> {
+    let directory = snapshots_dir(&app)?;
+    let entries = fs::read_dir(&directory)
+      .map_err(|error| format!("failed to read snapshots directory '{}': {}", directory.display(), error))?;
+
+    let mut metas: Vec<ReportSnapshotMeta> = Vec::new();
+
+    for entry_result in entries {
+      let entry = match entry_result {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+
+      let path = entry.path();
+      if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+        continue;
+      }
+
+      if let Ok(snapshot) = read_snapshot(&path) {
+        metas.push(snapshot.meta);
+      }
+    }
+
+    metas.sort_by(|a, b| {
+      b.created_at_epoch_ms
+        .cmp(&a.created_at_epoch_ms)
+        .then_with(|| severity_rank(&b.highest_severity).cmp(&severity_rank(&a.highest_severity)))
+    });
+
+    let capped_limit = limit.unwrap_or(20).min(100);
+    Ok(metas.into_iter().take(capped_limit).collect())
+  }
+
+  #[tauri::command]
+  pub fn get_report_snapshot(
+    app: tauri::AppHandle,
+    snapshot_id: String,
+  ) -> Result<ReportSnapshot, String> {
+    let path = snapshot_file_path(&app, &snapshot_id)?;
+    if !path.exists() {
+      return Err(format!("snapshot '{}' not found", snapshot_id));
+    }
+
+    read_snapshot(&path)
+  }
+
+  #[tauri::command]
+  pub fn export_report_snapshot(
+    app: tauri::AppHandle,
+    snapshot_id: String,
+    format: String,
+  ) -> Result<ExportResult, String> {
+    let normalized = format.to_lowercase();
+    if normalized != "json" && normalized != "txt" {
+      return Err("unsupported format. Use 'json' or 'txt'.".to_string());
+    }
+
+    let snapshot = get_report_snapshot(app.clone(), snapshot_id.clone())?;
+    let export_directory = exports_dir(&app)?;
+
+    let extension = if normalized == "json" { "json" } else { "txt" };
+    let export_path = export_directory.join(format!("{}-export.{}", snapshot_id, extension));
+
+    if normalized == "json" {
+      write_json_atomic(&export_path, &snapshot)?;
+    } else {
+      let text_report = build_plain_text_report(&snapshot);
+      fs::write(&export_path, text_report).map_err(|error| {
+        format!(
+          "failed to write text export '{}': {}",
+          export_path.display(),
+          error
+        )
+      })?;
+    }
+
+    Ok(ExportResult {
+      snapshot_id,
+      format: normalized,
+      exported_at_epoch_ms: now_epoch_ms(),
+      file_path: export_path.display().to_string(),
+    })
+  }
 }
 
 pub fn run() {
@@ -364,7 +685,11 @@ pub fn run() {
       commands::scan_storage,
       commands::list_processes,
       commands::get_system_health,
-      commands::analyze_issues
+      commands::analyze_issues,
+      commands::create_report_snapshot,
+      commands::list_report_snapshots,
+      commands::get_report_snapshot,
+      commands::export_report_snapshot
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
