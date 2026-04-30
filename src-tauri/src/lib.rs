@@ -93,10 +93,57 @@ pub struct ExportResult {
   pub file_path: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessActionConfirmation {
+  pub acknowledged_risk: bool,
+  pub reason: String,
+  pub typed_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ManageProcessActionRequest {
+  pub pid: i32,
+  pub action: String,
+  pub process_name_hint: Option<String>,
+  pub confirmation: Option<ProcessActionConfirmation>,
+  pub source_context: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionResult {
+  pub action: String,
+  pub target_pid: i32,
+  pub status: String,
+  pub message: String,
+  pub performed_at_epoch_ms: u128,
+  pub audit_id: String,
+  pub risk_level: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionAuditRecord {
+  pub audit_id: String,
+  pub action: String,
+  pub pid: i32,
+  pub process_name: String,
+  pub decision: String,
+  pub reason: String,
+  pub risk_level: String,
+  pub requested_at_epoch_ms: u128,
+  pub completed_at_epoch_ms: Option<u128>,
+  pub source_version: String,
+  pub source_context: Option<String>,
+}
+
 mod commands {
   use super::*;
 
   const MAX_SNAPSHOT_COUNT: usize = 100;
+  const MAX_AUDIT_RECORDS: usize = 500;
 
   fn now_epoch_ms() -> u128 {
     SystemTime::now()
@@ -191,6 +238,22 @@ mod commands {
     Ok(dir.join(format!("{}.json", snapshot_id)))
   }
 
+  fn action_audit_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+      .path()
+      .app_data_dir()
+      .map_err(|error| format!("failed to resolve app data directory: {}", error))?;
+
+    let path = app_data.join("action-audit");
+    ensure_directory(&path)?;
+    Ok(path)
+  }
+
+  fn action_audit_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = action_audit_dir(app)?;
+    Ok(dir.join("process-actions.json"))
+  }
+
   fn read_snapshot(path: &Path) -> Result<ReportSnapshot, String> {
     let content = fs::read_to_string(path)
       .map_err(|error| format!("failed to read snapshot file '{}': {}", path.display(), error))?;
@@ -259,6 +322,169 @@ mod commands {
       if stale_path.exists() {
         let _ = fs::remove_file(stale_path);
       }
+    }
+
+    Ok(())
+  }
+
+  fn enforce_audit_retention(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+      return Ok(());
+    }
+
+    let content = fs::read_to_string(path)
+      .map_err(|error| format!("failed to read audit file '{}': {}", path.display(), error))?;
+
+    if content.trim().is_empty() {
+      return Ok(());
+    }
+
+    let mut records: Vec<ActionAuditRecord> = serde_json::from_str(&content)
+      .map_err(|error| format!("failed to parse audit file '{}': {}", path.display(), error))?;
+
+    if records.len() > MAX_AUDIT_RECORDS {
+      let start = records.len().saturating_sub(MAX_AUDIT_RECORDS);
+      records = records.split_off(start);
+      write_json_atomic(path, &records)?;
+    }
+
+    Ok(())
+  }
+
+  fn append_action_audit(
+    app: &tauri::AppHandle,
+    record: &ActionAuditRecord,
+  ) -> Result<(), String> {
+    let path = action_audit_file_path(app)?;
+
+    let mut records: Vec<ActionAuditRecord> = if path.exists() {
+      let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read audit file '{}': {}", path.display(), error))?;
+
+      if content.trim().is_empty() {
+        Vec::new()
+      } else {
+        serde_json::from_str(&content)
+          .map_err(|error| format!("failed to parse audit json '{}': {}", path.display(), error))?
+      }
+    } else {
+      Vec::new()
+    };
+
+    records.push(record.clone());
+    write_json_atomic(&path, &records)?;
+    enforce_audit_retention(&path)?;
+
+    Ok(())
+  }
+
+  fn list_action_audits(app: &tauri::AppHandle, limit: usize) -> Result<Vec<ActionAuditRecord>, String> {
+    let path = action_audit_file_path(app)?;
+    if !path.exists() {
+      return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+      .map_err(|error| format!("failed to read audit file '{}': {}", path.display(), error))?;
+
+    if content.trim().is_empty() {
+      return Ok(Vec::new());
+    }
+
+    let mut records: Vec<ActionAuditRecord> = serde_json::from_str(&content)
+      .map_err(|error| format!("failed to parse audit file '{}': {}", path.display(), error))?;
+
+    records.sort_by(|a, b| b.requested_at_epoch_ms.cmp(&a.requested_at_epoch_ms));
+
+    Ok(records.into_iter().take(limit).collect())
+  }
+
+  fn is_protected_process_name(process_name: &str) -> bool {
+    let lower = process_name.to_lowercase();
+    let deny = [
+      "kernel_task",
+      "launchd",
+      "windowserver",
+      "sysmond",
+      "runningboardd",
+      "logd",
+      "mds",
+      "securityd",
+    ];
+
+    deny.iter().any(|item| lower == *item)
+  }
+
+  fn evaluate_risk_level(process: &ProcessInfo) -> String {
+    if is_protected_process_name(&process.name) || process.pid <= 1 {
+      return "critical".to_string();
+    }
+
+    if process.cpu_percent >= 80.0 || process.memory_percent >= 30.0 {
+      return "high".to_string();
+    }
+
+    if process.cpu_percent >= 40.0 || process.memory_percent >= 15.0 {
+      return "medium".to_string();
+    }
+
+    "low".to_string()
+  }
+
+  fn requires_confirmation(action: &str, risk_level: &str) -> bool {
+    action == "force_kill" || risk_level == "high" || risk_level == "critical"
+  }
+
+  fn validate_confirmation(
+    request: &ManageProcessActionRequest,
+    risk_level: &str,
+  ) -> Result<(), String> {
+    if !requires_confirmation(&request.action, risk_level) {
+      return Ok(());
+    }
+
+    let confirmation = request
+      .confirmation
+      .as_ref()
+      .ok_or_else(|| "confirmation is required for this action".to_string())?;
+
+    if !confirmation.acknowledged_risk {
+      return Err("risk acknowledgement is required".to_string());
+    }
+
+    if confirmation.reason.trim().is_empty() {
+      return Err("confirmation reason is required".to_string());
+    }
+
+    if request.action == "force_kill" {
+      let expected = format!("KILL {}", request.pid);
+      let typed = confirmation
+        .typed_token
+        .as_ref()
+        .ok_or_else(|| "typed token is required for force kill".to_string())?;
+
+      if typed.trim() != expected {
+        return Err(format!("invalid typed token. expected '{}'", expected));
+      }
+    }
+
+    Ok(())
+  }
+
+  fn execute_process_action(pid: i32, action: &str) -> Result<(), String> {
+    let signal = if action == "force_kill" { "-9" } else { "-15" };
+
+    let status = Command::new("kill")
+      .args([signal, &pid.to_string()])
+      .status()
+      .map_err(|error| format!("failed to invoke kill command: {}", error))?;
+
+    if !status.success() {
+      return Err(format!(
+        "process action failed for pid {} with status {:?}",
+        pid,
+        status.code()
+      ));
     }
 
     Ok(())
@@ -676,6 +902,136 @@ mod commands {
       file_path: export_path.display().to_string(),
     })
   }
+
+  #[tauri::command]
+  pub fn manage_process_action(
+    app: tauri::AppHandle,
+    request: ManageProcessActionRequest,
+  ) -> Result<ActionResult, String> {
+    let requested_at = now_epoch_ms();
+    let audit_id = format!("audit-{}-{}", requested_at, request.pid);
+
+    let process = list_processes()?
+      .into_iter()
+      .find(|item| item.pid == request.pid)
+      .ok_or_else(|| format!("process '{}' not found", request.pid))?;
+
+    let process_name = request
+      .process_name_hint
+      .clone()
+      .unwrap_or_else(|| process.name.clone());
+
+    let risk_level = evaluate_risk_level(&process);
+
+    if request.action != "terminate" && request.action != "force_kill" {
+      return Err("unsupported process action. Use 'terminate' or 'force_kill'.".to_string());
+    }
+
+    if is_protected_process_name(&process.name) || process.pid <= 1 {
+      let record = ActionAuditRecord {
+        audit_id: audit_id.clone(),
+        action: request.action.clone(),
+        pid: request.pid,
+        process_name,
+        decision: "blocked".to_string(),
+        reason: "protected process cannot be controlled".to_string(),
+        risk_level: "critical".to_string(),
+        requested_at_epoch_ms: requested_at,
+        completed_at_epoch_ms: Some(now_epoch_ms()),
+        source_version: env!("CARGO_PKG_VERSION").to_string(),
+        source_context: request.source_context.clone(),
+      };
+
+      append_action_audit(&app, &record)?;
+
+      return Ok(ActionResult {
+        action: request.action,
+        target_pid: request.pid,
+        status: "blocked".to_string(),
+        message: "protected process cannot be controlled".to_string(),
+        performed_at_epoch_ms: now_epoch_ms(),
+        audit_id,
+        risk_level: "critical".to_string(),
+      });
+    }
+
+    if let Err(error) = validate_confirmation(&request, &risk_level) {
+      let record = ActionAuditRecord {
+        audit_id: audit_id.clone(),
+        action: request.action.clone(),
+        pid: request.pid,
+        process_name,
+        decision: "denied".to_string(),
+        reason: error.clone(),
+        risk_level: risk_level.clone(),
+        requested_at_epoch_ms: requested_at,
+        completed_at_epoch_ms: Some(now_epoch_ms()),
+        source_version: env!("CARGO_PKG_VERSION").to_string(),
+        source_context: request.source_context.clone(),
+      };
+
+      append_action_audit(&app, &record)?;
+
+      return Ok(ActionResult {
+        action: request.action,
+        target_pid: request.pid,
+        status: "denied".to_string(),
+        message: error,
+        performed_at_epoch_ms: now_epoch_ms(),
+        audit_id,
+        risk_level,
+      });
+    }
+
+    let execution = execute_process_action(request.pid, &request.action);
+    let (status, message, decision) = match execution {
+      Ok(_) => (
+        "executed".to_string(),
+        format!("{} action completed for pid {}", request.action, request.pid),
+        "executed".to_string(),
+      ),
+      Err(error) => (
+        "failed".to_string(),
+        format!("process action failed: {}", error),
+        "failed".to_string(),
+      ),
+    };
+
+    let record = ActionAuditRecord {
+      audit_id: audit_id.clone(),
+      action: request.action.clone(),
+      pid: request.pid,
+      process_name,
+      decision,
+      reason: message.clone(),
+      risk_level: risk_level.clone(),
+      requested_at_epoch_ms: requested_at,
+      completed_at_epoch_ms: Some(now_epoch_ms()),
+      source_version: env!("CARGO_PKG_VERSION").to_string(),
+      source_context: request.source_context,
+    };
+
+    append_action_audit(&app, &record)?;
+
+    Ok(ActionResult {
+      action: request.action,
+      target_pid: request.pid,
+      status,
+      message,
+      performed_at_epoch_ms: now_epoch_ms(),
+      audit_id,
+      risk_level,
+    })
+  }
+
+  #[tauri::command]
+  pub fn list_process_action_audits(
+    app: tauri::AppHandle,
+    limit: Option<usize>,
+  ) -> Result<Vec<ActionAuditRecord>, String> {
+    let capped_limit = limit.unwrap_or(20).min(100);
+    list_action_audits(&app, capped_limit)
+  }
 }
 
 pub fn run() {
@@ -689,7 +1045,9 @@ pub fn run() {
       commands::create_report_snapshot,
       commands::list_report_snapshots,
       commands::get_report_snapshot,
-      commands::export_report_snapshot
+      commands::export_report_snapshot,
+      commands::manage_process_action,
+      commands::list_process_action_audits
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

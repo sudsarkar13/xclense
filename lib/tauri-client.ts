@@ -71,6 +71,48 @@ export interface ExportResult {
   filePath: string;
 }
 
+export type ProcessActionType = "terminate" | "force_kill";
+
+export interface ProcessActionConfirmation {
+  acknowledgedRisk: boolean;
+  reason: string;
+  typedToken?: string;
+}
+
+export interface ManageProcessActionRequest {
+  pid: number;
+  action: ProcessActionType;
+  processNameHint?: string;
+  confirmation?: ProcessActionConfirmation;
+  sourceContext?: "health_page" | "dashboard" | "auto_suggestion";
+}
+
+export type ActionStatus = "executed" | "blocked" | "denied" | "failed";
+
+export interface ActionResult {
+  action: ProcessActionType;
+  targetPid: number;
+  status: ActionStatus;
+  message: string;
+  performedAtEpochMs: number;
+  auditId: string;
+  riskLevel: "low" | "medium" | "high" | "critical";
+}
+
+export interface ActionAuditRecord {
+  auditId: string;
+  action: ProcessActionType;
+  pid: number;
+  processName: string;
+  decision: ActionStatus;
+  reason: string;
+  riskLevel: "low" | "medium" | "high" | "critical";
+  requestedAtEpochMs: number;
+  completedAtEpochMs?: number;
+  sourceVersion: string;
+  sourceContext?: string;
+}
+
 /**
  * Determines whether the app is running inside a Tauri runtime.
  */
@@ -155,5 +197,23 @@ export const exportReportSnapshot = async (
   return invoke<ExportResult>("export_report_snapshot", {
     snapshotId,
     format,
+  });
+};
+
+export const manageProcessAction = async (
+  request: ManageProcessActionRequest,
+): Promise<ActionResult> => {
+  ensureTauriRuntime();
+  return invoke<ActionResult>("manage_process_action", {
+    request,
+  });
+};
+
+export const listProcessActionAudits = async (
+  limit?: number,
+): Promise<ActionAuditRecord[]> => {
+  ensureTauriRuntime();
+  return invoke<ActionAuditRecord[]>("list_process_action_audits", {
+    limit,
   });
 };
