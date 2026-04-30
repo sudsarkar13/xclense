@@ -1,8 +1,8 @@
 [package]
-name = "xclense"
+name = "Xclense"
 version = "0.1.0"
 description = "Xclense system utility backend"
-authors = ["xclense"]
+authors = ["Xclense"]
 license = ""
 repository = ""
 edition = "2021"
