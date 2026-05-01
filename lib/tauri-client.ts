@@ -94,6 +94,7 @@ export interface ActionResult {
   targetPid: number;
   status: ActionStatus;
   message: string;
+  decisionCode: string;
   performedAtEpochMs: number;
   auditId: string;
   riskLevel: "low" | "medium" | "high" | "critical";
@@ -105,6 +106,7 @@ export interface ActionAuditRecord {
   pid: number;
   processName: string;
   decision: ActionStatus;
+  decisionCode: string;
   reason: string;
   riskLevel: "low" | "medium" | "high" | "critical";
   requestedAtEpochMs: number;

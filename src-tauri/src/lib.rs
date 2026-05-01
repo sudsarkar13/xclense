@@ -118,6 +118,7 @@ pub struct ActionResult {
   pub target_pid: i32,
   pub status: String,
   pub message: String,
+  pub decision_code: String,
   pub performed_at_epoch_ms: u128,
   pub audit_id: String,
   pub risk_level: String,
@@ -131,6 +132,7 @@ pub struct ActionAuditRecord {
   pub pid: i32,
   pub process_name: String,
   pub decision: String,
+  pub decision_code: String,
   pub reason: String,
   pub risk_level: String,
   pub requested_at_epoch_ms: u128,
@@ -934,6 +936,7 @@ mod commands {
         pid: request.pid,
         process_name,
         decision: "blocked".to_string(),
+        decision_code: "POLICY_PROTECTED_PROCESS".to_string(),
         reason: "protected process cannot be controlled".to_string(),
         risk_level: "critical".to_string(),
         requested_at_epoch_ms: requested_at,
@@ -949,6 +952,7 @@ mod commands {
         target_pid: request.pid,
         status: "blocked".to_string(),
         message: "protected process cannot be controlled".to_string(),
+        decision_code: "POLICY_PROTECTED_PROCESS".to_string(),
         performed_at_epoch_ms: now_epoch_ms(),
         audit_id,
         risk_level: "critical".to_string(),
@@ -962,6 +966,7 @@ mod commands {
         pid: request.pid,
         process_name,
         decision: "denied".to_string(),
+        decision_code: "CONFIRMATION_REQUIRED_OR_INVALID".to_string(),
         reason: error.clone(),
         risk_level: risk_level.clone(),
         requested_at_epoch_ms: requested_at,
@@ -977,6 +982,7 @@ mod commands {
         target_pid: request.pid,
         status: "denied".to_string(),
         message: error,
+        decision_code: "CONFIRMATION_REQUIRED_OR_INVALID".to_string(),
         performed_at_epoch_ms: now_epoch_ms(),
         audit_id,
         risk_level,
@@ -984,16 +990,18 @@ mod commands {
     }
 
     let execution = execute_process_action(request.pid, &request.action);
-    let (status, message, decision) = match execution {
+    let (status, message, decision, decision_code) = match execution {
       Ok(_) => (
         "executed".to_string(),
         format!("{} action completed for pid {}", request.action, request.pid),
         "executed".to_string(),
+        "ACTION_EXECUTED".to_string(),
       ),
       Err(error) => (
         "failed".to_string(),
         format!("process action failed: {}", error),
         "failed".to_string(),
+        "ACTION_EXECUTION_FAILED".to_string(),
       ),
     };
 
@@ -1003,6 +1011,7 @@ mod commands {
       pid: request.pid,
       process_name,
       decision,
+      decision_code: decision_code.clone(),
       reason: message.clone(),
       risk_level: risk_level.clone(),
       requested_at_epoch_ms: requested_at,
@@ -1018,6 +1027,7 @@ mod commands {
       target_pid: request.pid,
       status,
       message,
+      decision_code,
       performed_at_epoch_ms: now_epoch_ms(),
       audit_id,
       risk_level,

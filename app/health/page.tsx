@@ -191,7 +191,7 @@ export default function HealthPage(): React.JSX.Element {
       });
 
       setActionMessage(
-        `[${result.status.toUpperCase()}] ${result.message} (Audit: ${result.auditId}, Risk: ${result.riskLevel.toUpperCase()})`,
+        `[${result.status.toUpperCase()} | ${result.decisionCode}] ${result.message} (Audit: ${result.auditId}, Risk: ${result.riskLevel.toUpperCase()})`,
       );
 
       closeAction();
@@ -440,7 +440,7 @@ export default function HealthPage(): React.JSX.Element {
                 <ul className="mt-1 space-y-1 text-xs text-zinc-300">
                   {audits.map((audit) => (
                     <li key={audit.auditId}>
-                      [{audit.decision.toUpperCase()}] {audit.action} pid {audit.pid} · {audit.processName} · risk {audit.riskLevel.toUpperCase()}
+                      [{audit.decision.toUpperCase()} | {audit.decisionCode}] {audit.action} pid {audit.pid} · {audit.processName} · risk {audit.riskLevel.toUpperCase()}
                     </li>
                   ))}
                 </ul>
