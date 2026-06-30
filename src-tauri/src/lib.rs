@@ -746,13 +746,19 @@ mod commands {
     let total_kb = parse_u64(fields[1])?;
     let used_kb = parse_u64(fields[2])?;
     let free_kb = parse_u64(fields[3])?;
-    let used_percent_text = fields[4].trim_end_matches('%');
-    let used_percent = parse_f64(used_percent_text)?;
+    let total_bytes = total_kb.saturating_mul(1024);
+    let used_bytes = used_kb.saturating_mul(1024);
+    let free_bytes = free_kb.saturating_mul(1024);
+    let used_percent = if total_bytes == 0 {
+      0.0
+    } else {
+      (used_bytes as f64 / total_bytes as f64) * 100.0
+    };
 
     Ok(StorageSummary {
-      total_bytes: total_kb.saturating_mul(1024),
-      used_bytes: used_kb.saturating_mul(1024),
-      free_bytes: free_kb.saturating_mul(1024),
+      total_bytes,
+      used_bytes,
+      free_bytes,
       used_percent,
       scanned_at_epoch_ms: now_epoch_ms(),
     })
@@ -1679,8 +1685,12 @@ mod commands {
         Some(value) => value,
         None => continue,
       };
-      let percent_token = fields.next().unwrap_or("0%").trim_end_matches('%');
-      let used_percent = percent_token.parse::<f64>().unwrap_or(0.0);
+      let _percent_token = fields.next().unwrap_or("0%").trim_end_matches('%');
+      let used_percent = if total_kb == 0 {
+        0.0
+      } else {
+        (used_kb as f64 / total_kb as f64) * 100.0
+      };
       let mount_point = fields.collect::<Vec<&str>>().join(" ");
 
       if filesystem.is_empty() || mount_point.is_empty() {
@@ -1729,21 +1739,24 @@ mod commands {
     let physical_disks = list_physical_disks();
     let volumes = parse_df_volumes();
 
-    let summary = StorageSummary {
-      total_bytes: volumes.iter().map(|volume| volume.total_bytes).sum(),
-      used_bytes: volumes.iter().map(|volume| volume.used_bytes).sum(),
-      free_bytes: volumes.iter().map(|volume| volume.free_bytes).sum(),
-      used_percent: {
-        let total: u64 = volumes.iter().map(|volume| volume.total_bytes).sum();
-        let used: u64 = volumes.iter().map(|volume| volume.used_bytes).sum();
-        if total == 0 {
-          0.0
-        } else {
-          (used as f64 / total as f64) * 100.0
-        }
-      },
-      scanned_at_epoch_ms: now_epoch_ms(),
-    };
+    let summary = scan_storage().unwrap_or_else(|_| {
+      let total_bytes: u64 = volumes.iter().map(|volume| volume.total_bytes).sum();
+      let used_bytes: u64 = volumes.iter().map(|volume| volume.used_bytes).sum();
+      let free_bytes: u64 = volumes.iter().map(|volume| volume.free_bytes).sum();
+      let used_percent = if total_bytes == 0 {
+        0.0
+      } else {
+        (used_bytes as f64 / total_bytes as f64) * 100.0
+      };
+
+      StorageSummary {
+        total_bytes,
+        used_bytes,
+        free_bytes,
+        used_percent,
+        scanned_at_epoch_ms: now_epoch_ms(),
+      }
+    });
 
     let mac_model = shell_output_trimmed("sysctl", &["-n", "hw.model"])
       .or_else(|| {

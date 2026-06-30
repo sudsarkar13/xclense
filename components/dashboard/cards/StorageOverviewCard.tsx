@@ -29,13 +29,33 @@ export function StorageOverviewCard({
 	onScan,
 	isScanning = false,
 }: StorageOverviewCardProps): React.JSX.Element {
-	const clamped = Math.max(0, Math.min(100, usedPercent));
-	const usedBytes = totalBytes - freeBytes;
-
-	const applicationPercent = Math.max(8, clamped * 0.45);
-	const systemPercent = Math.max(6, clamped * 0.28);
-	const photosPercent = Math.max(4, clamped * 0.15);
-	const otherPercent = Math.max(3, clamped * 0.12);
+	const safeTotalBytes = Math.max(0, totalBytes);
+	const safeFreeBytes = Math.min(Math.max(0, freeBytes), safeTotalBytes);
+	const usedBytes = Math.max(0, safeTotalBytes - safeFreeBytes);
+	const measuredUsedPercent =
+		safeTotalBytes > 0 ? (usedBytes / safeTotalBytes) * 100 : usedPercent;
+	const clamped = Math.max(0, Math.min(100, measuredUsedPercent));
+	const freePercent = Math.max(0, Math.min(100, 100 - clamped));
+	const segments = [
+		{
+			label: "Used storage",
+			description:
+				"All occupied space reported by the system for the startup volume.",
+			bytes: usedBytes,
+			percent: clamped,
+			colorClass: "bg-sky-500",
+			textClass: "text-sky-200",
+		},
+		{
+			label: "Available free",
+			description:
+				"Free space still available on the startup volume for apps, files, and system work.",
+			bytes: safeFreeBytes,
+			percent: freePercent,
+			colorClass: "bg-emerald-500",
+			textClass: "text-emerald-200",
+		},
+	];
 
 	return (
 		<section
@@ -59,49 +79,76 @@ export function StorageOverviewCard({
 						className="w-72 border border-white/15 bg-zinc-900/95 text-zinc-100">
 						<p className="text-xs font-semibold">Storage Overview</p>
 						<p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
-							This widget summarises used versus free disk space and the
-							breakdown by category. Open the Storage page to see every physical
-							disk, mounted volume, and run a reclaimable-space scan.
+							This widget uses measured total, used, and free bytes from the
+							startup volume. The percentage badge is recalculated from bytes so
+							it stays consistent with the displayed capacity.
 						</p>
 					</HoverCardContent>
 				</HoverCard>
 			</div>
 
 			<div className="mt-2 flex items-center justify-between text-xs">
-				<p className="text-zinc-300">{formatGb(totalBytes)} Total</p>
-				<p className="text-zinc-300">{formatGb(freeBytes)} Free</p>
+				<p className="text-zinc-300">{formatGb(safeTotalBytes)} Total</p>
+				<p className="text-zinc-300">{formatGb(safeFreeBytes)} Free</p>
 			</div>
 
-			<div className="mt-1.5 flex h-5 overflow-hidden rounded-md bg-white/10">
-				<div
-					className="bg-sky-500"
-					style={{ width: `${applicationPercent}%` }}
-				/>
-				<div className="bg-violet-500" style={{ width: `${systemPercent}%` }} />
-				<div
-					className="bg-emerald-500"
-					style={{ width: `${photosPercent}%` }}
-				/>
-				<div className="bg-amber-400" style={{ width: `${otherPercent}%` }} />
+			<div className="mt-1.5 flex h-6 overflow-hidden rounded-md bg-white/10 ring-1 ring-white/10">
+				{segments.map((segment) => (
+					<HoverCard key={segment.label} openDelay={100} closeDelay={80}>
+						<HoverCardTrigger asChild>
+							<div
+								className={cn(
+									"h-full transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70",
+									segment.colorClass,
+								)}
+								style={{ width: `${segment.percent}%` }}
+								tabIndex={0}
+								role="button"
+								aria-label={`${segment.label}: ${formatGb(segment.bytes)}, ${segment.percent.toFixed(1)} percent`}
+							/>
+						</HoverCardTrigger>
+						<HoverCardContent className="w-64 border border-white/15 bg-zinc-900/95 text-zinc-100">
+							<p className={cn("text-xs font-semibold", segment.textClass)}>
+								{segment.label}
+							</p>
+							<p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
+								{segment.description}
+							</p>
+							<p className="mt-2 text-xs text-zinc-100">
+								{formatGb(segment.bytes)} · {segment.percent.toFixed(1)}%
+							</p>
+						</HoverCardContent>
+					</HoverCard>
+				))}
 			</div>
 
 			<div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-zinc-300">
-				<p className="inline-flex items-center gap-1.5">
-					<span className="h-2.5 w-2.5 rounded-full bg-sky-500" />
-					Applications
-				</p>
-				<p className="inline-flex items-center gap-1.5">
-					<span className="h-2.5 w-2.5 rounded-full bg-violet-500" />
-					System Data
-				</p>
-				<p className="inline-flex items-center gap-1.5">
-					<span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-					Photos
-				</p>
-				<p className="inline-flex items-center gap-1.5">
-					<span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-					Other
-				</p>
+				{segments.map((segment) => (
+					<HoverCard key={segment.label} openDelay={100} closeDelay={80}>
+						<HoverCardTrigger asChild>
+							<p className="inline-flex cursor-help items-center gap-1.5 rounded px-1 py-0.5 hover:bg-white/5">
+								<span
+									className={cn("h-2.5 w-2.5 rounded-full", segment.colorClass)}
+								/>
+								<span>{segment.label}</span>
+								<span className="text-zinc-500">
+									{segment.percent.toFixed(1)}%
+								</span>
+							</p>
+						</HoverCardTrigger>
+						<HoverCardContent className="w-64 border border-white/15 bg-zinc-900/95 text-zinc-100">
+							<p className={cn("text-xs font-semibold", segment.textClass)}>
+								{segment.label}
+							</p>
+							<p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
+								{segment.description}
+							</p>
+							<p className="mt-2 text-xs text-zinc-100">
+								{formatGb(segment.bytes)} · {segment.percent.toFixed(1)}%
+							</p>
+						</HoverCardContent>
+					</HoverCard>
+				))}
 			</div>
 
 			<div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 pt-1.5 text-[11px] text-zinc-300">
@@ -109,7 +156,7 @@ export function StorageOverviewCard({
 					<span className="text-zinc-400">Used:</span> {formatGb(usedBytes)}
 				</span>
 				<span>
-					<span className="text-zinc-400">Free:</span> {formatGb(freeBytes)}
+					<span className="text-zinc-400">Free:</span> {formatGb(safeFreeBytes)}
 				</span>
 				<span
 					className={cn(
