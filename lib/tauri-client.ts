@@ -157,6 +157,87 @@ export interface RemediationExecution {
 	allSucceeded: boolean;
 }
 
+export interface PhysicalDisk {
+	device: string;
+	kind: string;
+	sizeBytes: number;
+	removable: boolean;
+	internal: boolean;
+}
+
+export interface VolumeInfo {
+	mountPoint: string;
+	filesystem: string;
+	totalBytes: number;
+	usedBytes: number;
+	freeBytes: number;
+	usedPercent: number;
+}
+
+export interface StorageDetail {
+	scannedAtEpochMs: number;
+	macModel: string;
+	architecture: string;
+	macosVersion: string;
+	physicalDisks: PhysicalDisk[];
+	volumes: VolumeInfo[];
+	summary: StorageSummary;
+}
+
+export interface StorageCategory {
+	id: string;
+	label: string;
+	description: string;
+	color: string;
+	pathPrefixes: string[];
+	riskLevel: "low" | "medium" | "high";
+}
+
+export interface StorageScanItem {
+	id: string;
+	categoryId: string;
+	path: string;
+	sizeBytes: number;
+	modifiedEpochMs: number;
+	lastAccessedEpochMs: number;
+	riskLevel: "low" | "medium" | "high";
+	recommendation: string;
+}
+
+export interface StorageScanResult {
+	startedAtEpochMs: number;
+	completedAtEpochMs: number;
+	scannedPaths: number;
+	items: StorageScanItem[];
+	categories: StorageCategory[];
+	totalRecoverableBytes: number;
+}
+
+export interface CleanupRequest {
+	itemIds: string[];
+	acknowledgedRisk: boolean;
+	reason: string;
+	typedToken?: string;
+}
+
+export interface CleanupItemResult {
+	itemId: string;
+	path: string;
+	status: "succeeded" | "failed" | "skipped" | "unknown";
+	message: string;
+	reclaimedBytes: number;
+	performedAtEpochMs: number;
+}
+
+export interface CleanupResult {
+	requestedItemIds: string[];
+	results: CleanupItemResult[];
+	totalReclaimedBytes: number;
+	allSucceeded: boolean;
+	performedAtEpochMs: number;
+	auditId: string;
+}
+
 /**
  * Determines whether the app is running inside a Tauri runtime.
  */
@@ -277,5 +358,24 @@ export const runSafeRemediation = async (
 	ensureTauriRuntime();
 	return invoke<RemediationExecution>("run_safe_remediation", {
 		stepIds,
+	});
+};
+
+export const getStorageDetail = async (): Promise<StorageDetail> => {
+	ensureTauriRuntime();
+	return invoke<StorageDetail>("get_storage_detail");
+};
+
+export const scanStorageForCleanup = async (): Promise<StorageScanResult> => {
+	ensureTauriRuntime();
+	return invoke<StorageScanResult>("scan_storage_for_cleanup");
+};
+
+export const cleanupStorageItems = async (
+	request: CleanupRequest,
+): Promise<CleanupResult> => {
+	ensureTauriRuntime();
+	return invoke<CleanupResult>("cleanup_storage_items", {
+		request,
 	});
 };

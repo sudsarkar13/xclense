@@ -26,6 +26,105 @@ pub struct StorageSummary {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct PhysicalDisk {
+  pub device: String,
+  pub kind: String,
+  pub size_bytes: u64,
+  pub removable: bool,
+  pub internal: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeInfo {
+  pub mount_point: String,
+  pub filesystem: String,
+  pub total_bytes: u64,
+  pub used_bytes: u64,
+  pub free_bytes: u64,
+  pub used_percent: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageDetail {
+  pub scanned_at_epoch_ms: u128,
+  pub mac_model: String,
+  pub architecture: String,
+  pub macos_version: String,
+  pub physical_disks: Vec<PhysicalDisk>,
+  pub volumes: Vec<VolumeInfo>,
+  pub summary: StorageSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageCategory {
+  pub id: String,
+  pub label: String,
+  pub description: String,
+  pub color: String,
+  pub path_prefixes: Vec<String>,
+  pub risk_level: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageScanItem {
+  pub id: String,
+  pub category_id: String,
+  pub path: String,
+  pub size_bytes: u64,
+  pub modified_epoch_ms: u128,
+  pub last_accessed_epoch_ms: u128,
+  pub risk_level: String,
+  pub recommendation: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageScanResult {
+  pub started_at_epoch_ms: u128,
+  pub completed_at_epoch_ms: u128,
+  pub scanned_paths: u32,
+  pub items: Vec<StorageScanItem>,
+  pub categories: Vec<StorageCategory>,
+  pub total_recoverable_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupRequest {
+  pub item_ids: Vec<String>,
+  pub acknowledged_risk: bool,
+  pub reason: String,
+  pub typed_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupItemResult {
+  pub item_id: String,
+  pub path: String,
+  pub status: String,
+  pub message: String,
+  pub reclaimed_bytes: u64,
+  pub performed_at_epoch_ms: u128,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupResult {
+  pub requested_item_ids: Vec<String>,
+  pub results: Vec<CleanupItemResult>,
+  pub total_reclaimed_bytes: u64,
+  pub all_succeeded: bool,
+  pub performed_at_epoch_ms: u128,
+  pub audit_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessInfo {
   pub pid: i32,
   pub name: String,
@@ -1427,6 +1526,602 @@ mod commands {
       all_succeeded,
     })
   }
+
+  fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{}'", escaped)
+  }
+
+  fn detect_disk_kind(disk: &str) -> (String, bool, bool) {
+    let output = Command::new("diskutil")
+      .args(["info", &format!("/dev/{}", disk)])
+      .output();
+
+    let mut kind = "Unknown".to_string();
+    let mut removable = false;
+    let mut internal = false;
+
+    if let Ok(result) = output {
+      if result.status.success() {
+        let text = String::from_utf8_lossy(&result.stdout);
+        let lower = text.to_lowercase();
+
+        if lower.contains("nvme") {
+          kind = "NVMe SSD".to_string();
+        } else if lower.contains("apple ssd") || lower.contains("apple internal") {
+          kind = "Apple Internal SSD".to_string();
+        } else if lower.contains("fusion") {
+          kind = "Fusion Drive".to_string();
+        } else if lower.contains("solid state") || lower.contains(" ssd: yes") {
+          kind = "SSD".to_string();
+        } else if lower.contains("removable media: yes") || lower.contains("removable: yes") {
+          removable = true;
+          kind = "Removable".to_string();
+        } else if lower.contains("rotational") {
+          kind = "HDD (Rotational)".to_string();
+        }
+
+        removable = removable
+          || lower.contains("removable media: yes")
+          || lower.contains("ejectable: yes")
+          || lower.contains("removable: yes");
+        internal = lower.contains("internal: yes") || lower.contains("internal media");
+      }
+    }
+
+    (kind, removable, internal)
+  }
+
+  fn physical_disk_size_bytes(disk: &str) -> u64 {
+    let output = Command::new("diskutil")
+      .args(["info", &format!("/dev/{}", disk)])
+      .output();
+
+    if let Ok(result) = output {
+      if result.status.success() {
+        let text = String::from_utf8_lossy(&result.stdout);
+        if let Some(line) = text
+          .lines()
+          .find(|line| line.to_lowercase().contains("disk size"))
+        {
+          // Example: "Disk Size: 500.1 GB (500107862016 Bytes)"
+          if let Some(start) = line.find('(') {
+            if let Some(end) = line[start..].find(' ') {
+              let candidate = &line[start + 1..start + end];
+              if let Ok(value) = candidate.replace(',', "").parse::<u64>() {
+                return value;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    0
+  }
+
+  fn list_physical_disks() -> Vec<PhysicalDisk> {
+    let output = Command::new("diskutil").args(["list"]).output();
+
+    let stdout = match output {
+      Ok(value) if value.status.success() => String::from_utf8_lossy(&value.stdout).to_string(),
+      _ => return Vec::new(),
+    };
+
+    let mut disks: Vec<PhysicalDisk> = Vec::new();
+
+    for line in stdout.lines() {
+      let trimmed = line.trim_start();
+      if !trimmed.starts_with("/dev/disk") {
+        continue;
+      }
+
+      let device = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_start_matches("/dev/")
+        .to_string();
+
+      if device.is_empty() {
+        continue;
+      }
+
+      let (kind, removable, internal) = detect_disk_kind(&device);
+      let size_bytes = physical_disk_size_bytes(&device);
+
+      disks.push(PhysicalDisk {
+        device: format!("/dev/{}", device),
+        kind,
+        size_bytes,
+        removable,
+        internal,
+      });
+    }
+
+    disks.sort_by(|a, b| a.device.cmp(&b.device));
+    disks
+  }
+
+  fn parse_df_volumes() -> Vec<VolumeInfo> {
+    let output = match Command::new("df").args(["-k"]).output() {
+      Ok(value) if value.status.success() => String::from_utf8_lossy(&value.stdout).to_string(),
+      _ => return Vec::new(),
+    };
+
+    let mut volumes: Vec<VolumeInfo> = Vec::new();
+
+    for (index, line) in output.lines().enumerate() {
+      if index == 0 {
+        continue;
+      }
+
+      let mut fields = line.split_whitespace();
+      let filesystem = fields.next().unwrap_or("").to_string();
+      let total_kb = match fields.next().and_then(|value| value.parse::<u64>().ok()) {
+        Some(value) => value,
+        None => continue,
+      };
+      let used_kb = match fields.next().and_then(|value| value.parse::<u64>().ok()) {
+        Some(value) => value,
+        None => continue,
+      };
+      let free_kb = match fields.next().and_then(|value| value.parse::<u64>().ok()) {
+        Some(value) => value,
+        None => continue,
+      };
+      let percent_token = fields.next().unwrap_or("0%").trim_end_matches('%');
+      let used_percent = percent_token.parse::<f64>().unwrap_or(0.0);
+      let mount_point = fields.collect::<Vec<&str>>().join(" ");
+
+      if filesystem.is_empty() || mount_point.is_empty() {
+        continue;
+      }
+
+      let lower_fs = filesystem.to_lowercase();
+      if lower_fs.starts_with("devfs")
+        || lower_fs.starts_with("map")
+        || lower_fs.starts_with("tmpfs")
+        || lower_fs.starts_with("nullfs")
+        || lower_fs.starts_with("union")
+        || lower_fs.starts_with("autofs")
+        || lower_fs.starts_with("securityfs")
+      {
+        continue;
+      }
+
+      if total_kb == 0 {
+        continue;
+      }
+
+      volumes.push(VolumeInfo {
+        mount_point,
+        filesystem,
+        total_bytes: total_kb.saturating_mul(1024),
+        used_bytes: used_kb.saturating_mul(1024),
+        free_bytes: free_kb.saturating_mul(1024),
+        used_percent,
+      });
+    }
+
+    volumes
+  }
+
+  fn shell_output_trimmed(command: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(args).output().ok()?;
+    if !output.status.success() {
+      return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+  }
+
+  #[tauri::command]
+  pub fn get_storage_detail() -> Result<StorageDetail, String> {
+    let physical_disks = list_physical_disks();
+    let volumes = parse_df_volumes();
+
+    let summary = StorageSummary {
+      total_bytes: volumes.iter().map(|volume| volume.total_bytes).sum(),
+      used_bytes: volumes.iter().map(|volume| volume.used_bytes).sum(),
+      free_bytes: volumes.iter().map(|volume| volume.free_bytes).sum(),
+      used_percent: {
+        let total: u64 = volumes.iter().map(|volume| volume.total_bytes).sum();
+        let used: u64 = volumes.iter().map(|volume| volume.used_bytes).sum();
+        if total == 0 {
+          0.0
+        } else {
+          (used as f64 / total as f64) * 100.0
+        }
+      },
+      scanned_at_epoch_ms: now_epoch_ms(),
+    };
+
+    let mac_model = shell_output_trimmed("sysctl", &["-n", "hw.model"])
+      .or_else(|| {
+        shell_output_trimmed("system_profiler", &["SPHardwareDataType"])
+          .and_then(|value| {
+            value
+              .lines()
+              .find(|line| line.contains("Model"))
+              .map(|line| line.split(':').nth(1).unwrap_or("").trim().to_string())
+          })
+      })
+      .unwrap_or_else(|| "Unknown Mac".to_string());
+
+    let arch = match shell_output_trimmed("uname", &["-m"]) {
+      Some(value) if value == "arm64" => "Apple Silicon (arm64)".to_string(),
+      Some(value) if value == "x86_64" => "Intel 64-bit (x86_64)".to_string(),
+      Some(value) => value,
+      None => "Unknown".to_string(),
+    };
+
+    let macos_version =
+      shell_output_trimmed("sw_vers", &["-productVersion"]).unwrap_or_else(|| "Unknown".to_string());
+
+    Ok(StorageDetail {
+      scanned_at_epoch_ms: now_epoch_ms(),
+      mac_model,
+      architecture: arch,
+      macos_version,
+      physical_disks,
+      volumes,
+      summary,
+    })
+  }
+
+  fn default_storage_categories() -> Vec<StorageCategory> {
+    vec![
+      StorageCategory {
+        id: "user_caches".to_string(),
+        label: "User app caches".to_string(),
+        description: "Caches stored under ~/Library/Caches. Safe to clear for apps that are not running.".to_string(),
+        color: "sky".to_string(),
+        path_prefixes: vec!["Library/Caches".to_string()],
+        risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "user_logs".to_string(),
+        label: "User app logs".to_string(),
+        description: "Diagnostic logs under ~/Library/Logs. Safe to remove for closed apps.".to_string(),
+        color: "violet".to_string(),
+        path_prefixes: vec!["Library/Logs".to_string()],
+        risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "downloads".to_string(),
+        label: "Old downloads".to_string(),
+        description: "Files in ~/Downloads that have not been opened in a long time.".to_string(),
+        color: "amber".to_string(),
+        path_prefixes: vec!["Downloads".to_string()],
+        risk_level: "medium".to_string(),
+      },
+      StorageCategory {
+        id: "trash".to_string(),
+        label: "Trash".to_string(),
+        description: "Items currently in the user's Trash bin.".to_string(),
+        color: "emerald".to_string(),
+        path_prefixes: vec![".Trash".to_string()],
+        risk_level: "medium".to_string(),
+      },
+      StorageCategory {
+        id: "browser_cache".to_string(),
+        label: "Browser caches".to_string(),
+        description: "Safari/Chrome/Firefox caches stored in containers and Library.".to_string(),
+        color: "rose".to_string(),
+        path_prefixes: vec![
+          "Library/Containers/com.apple.Safari/Data/Library/Caches".to_string(),
+          "Library/Caches/com.apple.Safari".to_string(),
+          "Library/Caches/Google".to_string(),
+          "Library/Caches/Firefox".to_string(),
+        ],
+        risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "xcode_derived".to_string(),
+        label: "Xcode derived data".to_string(),
+        description: "Build artifacts and module cache produced by Xcode.".to_string(),
+        color: "fuchsia".to_string(),
+        path_prefixes: vec!["Library/Developer/Xcode/DerivedData".to_string()],
+        risk_level: "low".to_string(),
+      },
+    ]
+  }
+
+  fn directory_size_bytes(path: &Path) -> u64 {
+    let output = Command::new("du").args(["-sk", "-s"]).arg(path).output();
+    match output {
+      Ok(value) if value.status.success() => {
+        let text = String::from_utf8_lossy(&value.stdout);
+        let first = text.split_whitespace().next().unwrap_or("0");
+        first.parse::<u64>().unwrap_or(0).saturating_mul(1024)
+      }
+      _ => 0,
+    }
+  }
+
+  fn dir_modified_epoch_ms(path: &Path) -> u128 {
+    fs::metadata(path)
+      .and_then(|meta| meta.modified())
+      .ok()
+      .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+      .map(|duration| duration.as_millis())
+      .unwrap_or(0)
+  }
+
+  fn dir_accessed_epoch_ms(path: &Path) -> u128 {
+    fs::metadata(path)
+      .and_then(|meta| meta.accessed())
+      .ok()
+      .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+      .map(|duration| duration.as_millis())
+      .unwrap_or(0)
+  }
+
+  fn home_dir() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("HOME") {
+      if !value.is_empty() {
+        return Some(PathBuf::from(value));
+      }
+    }
+
+    let output = Command::new("sh").args(["-c", "echo $HOME"]).output().ok()?;
+    if !output.status.success() {
+      return None;
+    }
+    let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if trimmed.is_empty() {
+      None
+    } else {
+      Some(PathBuf::from(trimmed))
+    }
+  }
+
+  fn scan_storage_categories() -> StorageScanResult {
+    let started_at = now_epoch_ms();
+    let categories = default_storage_categories();
+    let home = match home_dir() {
+      Some(value) => value,
+      None => {
+        return StorageScanResult {
+          started_at_epoch_ms: started_at,
+          completed_at_epoch_ms: now_epoch_ms(),
+          scanned_paths: 0,
+          items: Vec::new(),
+          categories,
+          total_recoverable_bytes: 0,
+        };
+      }
+    };
+
+    let mut items: Vec<StorageScanItem> = Vec::new();
+    let mut scanned: u32 = 0;
+    let mut item_counter: u32 = 0;
+
+    for category in &categories {
+      for prefix in &category.path_prefixes {
+        let candidate = home.join(prefix);
+        if !candidate.exists() {
+          continue;
+        }
+
+        // For non-Downloads/non-Trash categories, treat the prefix folder as a single item.
+        // For Downloads and Trash, we list children so the user can pick individually.
+        if category.id == "downloads" || category.id == "trash" {
+          if let Ok(entries) = fs::read_dir(&candidate) {
+            for entry in entries.flatten() {
+              let path = entry.path();
+              if !path.exists() {
+                continue;
+              }
+              scanned = scanned.saturating_add(1);
+              let size_bytes = if path.is_dir() {
+                directory_size_bytes(&path)
+              } else {
+                fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+              };
+              if size_bytes < 5 * 1024 * 1024 {
+                // Skip items under 5 MB to keep the list useful.
+                continue;
+              }
+              item_counter = item_counter.saturating_add(1);
+              items.push(StorageScanItem {
+                id: format!("scan-{}-{}", category.id, item_counter),
+                category_id: category.id.clone(),
+                path: path.to_string_lossy().to_string(),
+                size_bytes,
+                modified_epoch_ms: dir_modified_epoch_ms(&path),
+                last_accessed_epoch_ms: dir_accessed_epoch_ms(&path),
+                risk_level: category.risk_level.clone(),
+                recommendation: format!(
+                  "Review and remove {} items that are no longer needed.",
+                  category.label
+                ),
+              });
+            }
+          }
+        } else {
+          scanned = scanned.saturating_add(1);
+          let size_bytes = directory_size_bytes(&candidate);
+          if size_bytes < 1024 * 1024 {
+            continue;
+          }
+          item_counter = item_counter.saturating_add(1);
+          items.push(StorageScanItem {
+            id: format!("scan-{}-{}", category.id, item_counter),
+            category_id: category.id.clone(),
+            path: candidate.to_string_lossy().to_string(),
+            size_bytes,
+            modified_epoch_ms: dir_modified_epoch_ms(&candidate),
+            last_accessed_epoch_ms: dir_accessed_epoch_ms(&candidate),
+            risk_level: category.risk_level.clone(),
+            recommendation: format!(
+              "Remove the contents of this {} folder to reclaim space.",
+              category.label
+            ),
+          });
+        }
+      }
+    }
+
+    // Sort largest first.
+    items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    let total_recoverable_bytes: u64 = items.iter().map(|item| item.size_bytes).sum();
+
+    StorageScanResult {
+      started_at_epoch_ms: started_at,
+      completed_at_epoch_ms: now_epoch_ms(),
+      scanned_paths: scanned,
+      items,
+      categories,
+      total_recoverable_bytes,
+    }
+  }
+
+  #[tauri::command]
+  pub fn scan_storage_for_cleanup() -> Result<StorageScanResult, String> {
+    Ok(scan_storage_categories())
+  }
+
+  fn move_to_trash(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+      return Err(format!("path does not exist: {}", path.display()));
+    }
+
+    let target = shell_quote(&path.to_string_lossy());
+    let script = format!("osascript -e 'tell application \"Finder\" to delete POSIX file {}' >/dev/null 2>&1", target);
+    let status = Command::new("sh")
+      .args(["-c", &script])
+      .status()
+      .map_err(|error| format!("failed to invoke Finder trash command: {}", error))?;
+
+    if status.success() {
+      return Ok(());
+    }
+
+    // Fallback: rm -rf for non-Finder environments (e.g. CI / headless mac).
+    let status = Command::new("rm")
+      .args(["-rf", &path.to_string_lossy()])
+      .status()
+      .map_err(|error| format!("failed to invoke rm fallback: {}", error))?;
+
+    if status.success() {
+      Ok(())
+    } else {
+      Err(format!("rm -rf failed with status {:?}", status.code()))
+    }
+  }
+
+  #[tauri::command]
+  pub fn cleanup_storage_items(
+    app: tauri::AppHandle,
+    request: CleanupRequest,
+  ) -> Result<CleanupResult, String> {
+    if request.item_ids.is_empty() {
+      return Err("no items were requested for cleanup".to_string());
+    }
+
+    let scan = scan_storage_categories();
+    let by_id: std::collections::HashMap<String, &StorageScanItem> =
+      scan.items.iter().map(|item| (item.id.clone(), item)).collect();
+
+    if !request.acknowledged_risk {
+      let audit_id = format!("cleanup-denied-{}", now_epoch_ms());
+      let record = ActionAuditRecord {
+        audit_id: audit_id.clone(),
+        action: "storage_cleanup".to_string(),
+        pid: 0,
+        process_name: "system".to_string(),
+        decision: "denied".to_string(),
+        decision_code: "CONFIRMATION_REQUIRED_OR_INVALID".to_string(),
+        reason: "cleanup acknowledgement is required".to_string(),
+        risk_level: "medium".to_string(),
+        requested_at_epoch_ms: now_epoch_ms(),
+        completed_at_epoch_ms: Some(now_epoch_ms()),
+        source_version: env!("CARGO_PKG_VERSION").to_string(),
+        source_context: Some("storage_page".to_string()),
+      };
+      let _ = append_action_audit(&app, &record);
+
+      return Err("cleanup acknowledgement is required".to_string());
+    }
+
+    let performed_at = now_epoch_ms();
+    let audit_id = format!("cleanup-{}-{}", performed_at, request.item_ids.len());
+    let mut results: Vec<CleanupItemResult> = Vec::new();
+    let mut total_reclaimed: u64 = 0;
+    let mut all_succeeded = true;
+
+    for item_id in &request.item_ids {
+      let item = match by_id.get(item_id) {
+        Some(value) => value,
+        None => {
+          all_succeeded = false;
+          results.push(CleanupItemResult {
+            item_id: item_id.clone(),
+            path: String::new(),
+            status: "unknown".to_string(),
+            message: "item id did not match any item in the latest scan".to_string(),
+            reclaimed_bytes: 0,
+            performed_at_epoch_ms: performed_at,
+          });
+          continue;
+        }
+      };
+
+      let path = PathBuf::from(&item.path);
+      let outcome = move_to_trash(&path);
+
+      match outcome {
+        Ok(_) => {
+          total_reclaimed = total_reclaimed.saturating_add(item.size_bytes);
+          results.push(CleanupItemResult {
+            item_id: item.id.clone(),
+            path: item.path.clone(),
+            status: "succeeded".to_string(),
+            message: "Item moved to Trash.".to_string(),
+            reclaimed_bytes: item.size_bytes,
+            performed_at_epoch_ms: performed_at,
+          });
+        }
+        Err(error) => {
+          all_succeeded = false;
+          results.push(CleanupItemResult {
+            item_id: item.id.clone(),
+            path: item.path.clone(),
+            status: "failed".to_string(),
+            message: format!("Failed to remove item: {}", error),
+            reclaimed_bytes: 0,
+            performed_at_epoch_ms: performed_at,
+          });
+        }
+      }
+    }
+
+    let record = ActionAuditRecord {
+      audit_id: audit_id.clone(),
+      action: "storage_cleanup".to_string(),
+      pid: 0,
+      process_name: "system".to_string(),
+      decision: if all_succeeded { "executed".to_string() } else { "failed".to_string() },
+      decision_code: if all_succeeded { "CLEANUP_EXECUTED".to_string() } else { "CLEANUP_PARTIAL_OR_FAILED".to_string() },
+      reason: format!("reclaimed {} bytes across {} items", total_reclaimed, results.len()),
+      risk_level: "medium".to_string(),
+      requested_at_epoch_ms: performed_at,
+      completed_at_epoch_ms: Some(now_epoch_ms()),
+      source_version: env!("CARGO_PKG_VERSION").to_string(),
+      source_context: Some("storage_page".to_string()),
+    };
+    let _ = append_action_audit(&app, &record);
+
+    Ok(CleanupResult {
+      requested_item_ids: request.item_ids,
+      results,
+      total_reclaimed_bytes: total_reclaimed,
+      all_succeeded,
+      performed_at_epoch_ms: performed_at,
+      audit_id,
+    })
+  }
 }
 
 pub fn run() {
@@ -1444,7 +2139,10 @@ pub fn run() {
       commands::manage_process_action,
       commands::list_process_action_audits,
       commands::get_remediation_plan,
-      commands::run_safe_remediation
+      commands::run_safe_remediation,
+      commands::get_storage_detail,
+      commands::scan_storage_for_cleanup,
+      commands::cleanup_storage_items
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -10,19 +10,25 @@ import { DashboardHeader } from "@/components/dashboard/layout/DashboardHeader";
 import { DashboardNav } from "@/components/dashboard/layout/DashboardNav";
 import { IssueLogsSection } from "@/components/dashboard/sections/IssueLogsSection";
 import { TopProcessesSection } from "@/components/dashboard/sections/TopProcessesSection";
+import { StorageCleanupOverlay } from "@/components/dashboard/storage/StorageCleanupOverlay";
 import { computeHealthScore } from "@/components/dashboard/shared";
 import {
 	analyzeIssues,
+	cleanupStorageItems,
 	getRemediationPlan,
 	getSystemHealth,
 	isTauriRuntime,
 	listProcesses,
 	runSafeRemediation,
 	scanStorage,
+	scanStorageForCleanup,
 	type AnalysisReport,
+	type CleanupRequest,
+	type CleanupResult,
 	type ProcessInfo,
 	type RemediationPlan,
 	type RemediationStepResult,
+	type StorageScanResult,
 	type StorageSummary,
 	type SystemHealth,
 } from "@/lib/tauri-client";
@@ -60,6 +66,18 @@ export default function Home(): React.JSX.Element {
 		RemediationStepResult[] | null
 	>(null);
 	const [remediationError, setRemediationError] = useState<string | null>(null);
+
+	const [storageOverlayOpen, setStorageOverlayOpen] = useState<boolean>(false);
+	const [storageScan, setStorageScan] = useState<StorageScanResult | null>(
+		null,
+	);
+	const [isStorageScanning, setIsStorageScanning] = useState<boolean>(false);
+	const [isStorageExecuting, setIsStorageExecuting] = useState<boolean>(false);
+	const [storageCleanupResult, setStorageCleanupResult] =
+		useState<CleanupResult | null>(null);
+	const [storageCleanupError, setStorageCleanupError] = useState<string | null>(
+		null,
+	);
 
 	const appendMemoryTrend = useCallback((value: number) => {
 		const nextValue = Math.max(0, Math.min(100, value));
@@ -343,6 +361,72 @@ export default function Home(): React.JSX.Element {
 			});
 	}, [checkpointData]);
 
+	const openStorageOverlay = useCallback((): void => {
+		setStorageCleanupResult(null);
+		setStorageCleanupError(null);
+		setStorageOverlayOpen(true);
+		if (!storageScan && isTauriRuntime()) {
+			setIsStorageScanning(true);
+			void scanStorageForCleanup()
+				.then((result) => {
+					setStorageScan(result);
+				})
+				.catch((error: unknown) => {
+					const message =
+						error instanceof Error ? error.message : "Unable to scan storage";
+					setStorageCleanupError(message);
+				})
+				.finally(() => {
+					setIsStorageScanning(false);
+				});
+		}
+	}, [storageScan]);
+
+	const closeStorageOverlay = useCallback((next: boolean): void => {
+		setStorageOverlayOpen(next);
+		if (!next) {
+			setStorageCleanupResult(null);
+			setStorageCleanupError(null);
+		}
+	}, []);
+
+	const rescanStorageOverlay = useCallback((): void => {
+		setStorageCleanupResult(null);
+		setStorageCleanupError(null);
+		setIsStorageScanning(true);
+		void scanStorageForCleanup()
+			.then((result) => {
+				setStorageScan(result);
+			})
+			.catch((error: unknown) => {
+				const message =
+					error instanceof Error ? error.message : "Unable to scan storage";
+				setStorageCleanupError(message);
+			})
+			.finally(() => {
+				setIsStorageScanning(false);
+			});
+	}, []);
+
+	const runStorageCleanup = useCallback(
+		async (request: CleanupRequest): Promise<void> => {
+			setIsStorageExecuting(true);
+			setStorageCleanupError(null);
+			try {
+				const result = await cleanupStorageItems(request);
+				setStorageCleanupResult(result);
+				void loadRealtimeData();
+			} catch (error: unknown) {
+				const message =
+					error instanceof Error ? error.message : "Unable to run cleanup";
+				setStorageCleanupError(message);
+			} finally {
+				setIsStorageExecuting(false);
+			}
+		},
+		[loadRealtimeData],
+	);
+
 	return (
 		<div className="h-screen w-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] font-sans text-zinc-100">
 			<div className="grid h-full min-h-0 w-full grid-cols-12 border border-white/15 bg-[#0d1226]/90 shadow-2xl">
@@ -410,6 +494,8 @@ export default function Home(): React.JSX.Element {
 									totalBytes={realtimeData.storage.totalBytes}
 									freeBytes={realtimeData.storage.freeBytes}
 									usedPercent={realtimeData.storage.usedPercent}
+									onScan={openStorageOverlay}
+									isScanning={isStorageScanning && storageOverlayOpen}
 								/>
 							</div>
 
@@ -444,6 +530,26 @@ export default function Home(): React.JSX.Element {
 				onRunOne={handleRunOne}
 				onRescan={handleFixRescan}
 				errorMessage={remediationError}
+			/>
+
+			<StorageCleanupOverlay
+				open={storageOverlayOpen}
+				onOpenChange={closeStorageOverlay}
+				scan={
+					storageScan ?
+						{
+							items: storageScan.items,
+							categories: storageScan.categories,
+							totalRecoverableBytes: storageScan.totalRecoverableBytes,
+						}
+					:	null
+				}
+				isScanning={isStorageScanning}
+				isExecuting={isStorageExecuting}
+				result={storageCleanupResult}
+				errorMessage={storageCleanupError}
+				onRun={(request) => void runStorageCleanup(request)}
+				onRescan={rescanStorageOverlay}
 			/>
 		</div>
 	);

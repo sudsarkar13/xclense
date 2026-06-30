@@ -29,6 +29,28 @@ export const severityBadgeClass = (severity: SeverityLevel): string => {
 export const formatGb = (bytes: number): string =>
 	`${(bytes / 1024 ** 3).toFixed(1)} GB`;
 
+export const formatBytes = (bytes: number, fractionDigits = 1): string => {
+	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+	const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+	let value = bytes;
+	let unitIndex = 0;
+	while (value >= 1024 && unitIndex < units.length - 1) {
+		value /= 1024;
+		unitIndex += 1;
+	}
+	return `${value.toFixed(fractionDigits)} ${units[unitIndex]}`;
+};
+
+export const formatTimestamp = (epochMs: number): string => {
+	if (!Number.isFinite(epochMs) || epochMs <= 0) return "—";
+	return new Date(epochMs).toLocaleString([], {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+};
+
 export const processBarClass = (index: number): string => {
 	const colors = [
 		"from-sky-500 to-blue-400",
