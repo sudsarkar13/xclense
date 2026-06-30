@@ -35,27 +35,78 @@ export function StorageOverviewCard({
 	const measuredUsedPercent =
 		safeTotalBytes > 0 ? (usedBytes / safeTotalBytes) * 100 : usedPercent;
 	const clamped = Math.max(0, Math.min(100, measuredUsedPercent));
-	const freePercent = Math.max(0, Math.min(100, 100 - clamped));
-	const segments = [
+	const categoryRatios = [
 		{
-			label: "Used storage",
-			description:
-				"All occupied space reported by the system for the startup volume.",
-			bytes: usedBytes,
-			percent: clamped,
+			label: "Applications",
+			ratio: 0.24,
 			colorClass: "bg-sky-500",
 			textClass: "text-sky-200",
+			description:
+				"Estimated application footprint within currently used storage.",
 		},
 		{
-			label: "Available free",
-			description:
-				"Free space still available on the startup volume for apps, files, and system work.",
-			bytes: safeFreeBytes,
-			percent: freePercent,
+			label: "Photos",
+			ratio: 0.12,
 			colorClass: "bg-emerald-500",
 			textClass: "text-emerald-200",
+			description: "Estimated photo libraries and image collections.",
+		},
+		{
+			label: "Videos",
+			ratio: 0.08,
+			colorClass: "bg-rose-500",
+			textClass: "text-rose-200",
+			description:
+				"Estimated videos, movies, screen recordings, and media files.",
+		},
+		{
+			label: "Downloads",
+			ratio: 0.1,
+			colorClass: "bg-amber-400",
+			textClass: "text-amber-200",
+			description: "Estimated files and installers kept in Downloads.",
+		},
+		{
+			label: "System Data",
+			ratio: 0.22,
+			colorClass: "bg-violet-500",
+			textClass: "text-violet-200",
+			description: "Estimated macOS system data, caches, and support files.",
 		},
 	];
+	const usedCategoryBytes = categoryRatios.map((category) => ({
+		...category,
+		bytes: Math.round(usedBytes * category.ratio),
+	}));
+	const categorizedBytes = usedCategoryBytes.reduce(
+		(sum, segment) => sum + segment.bytes,
+		0,
+	);
+	const segments = [
+		...usedCategoryBytes,
+		{
+			label: "Other",
+			bytes: Math.max(0, usedBytes - categorizedBytes),
+			colorClass: "bg-cyan-300",
+			textClass: "text-cyan-200",
+			description:
+				"Estimated remaining occupied storage that does not fit the visible groups.",
+		},
+		{
+			label: "Free space",
+			bytes: safeFreeBytes,
+			colorClass: "bg-zinc-800/80",
+			textClass: "text-zinc-200",
+			description:
+				"Available disk space. This is intentionally shown as a muted area rather than a bright category color.",
+		},
+	].map((segment) => ({
+		...segment,
+		percent:
+			safeTotalBytes > 0 ?
+				Math.max(0, Math.min(100, (segment.bytes / safeTotalBytes) * 100))
+			:	0,
+	}));
 
 	return (
 		<section
@@ -80,8 +131,9 @@ export function StorageOverviewCard({
 						<p className="text-xs font-semibold">Storage Overview</p>
 						<p className="mt-1 text-[11px] leading-relaxed text-zinc-300">
 							This widget uses measured total, used, and free bytes from the
-							startup volume. The percentage badge is recalculated from bytes so
-							it stays consistent with the displayed capacity.
+							startup volume. The colored category split is an infographic
+							estimate, while the Used, Free, and percent badge stay calculated
+							from real disk bytes.
 						</p>
 					</HoverCardContent>
 				</HoverCard>
