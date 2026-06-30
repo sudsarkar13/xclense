@@ -65,6 +65,17 @@ pub struct AnalysisReport {
   pub generated_at_epoch_ms: u128,
   pub total_issues: usize,
   pub issues: Vec<IssueReport>,
+  pub categories: Vec<IssueCategory>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCategory {
+  pub id: String,
+  pub label: String,
+  pub severity: String,
+  pub count: usize,
+  pub first_issue_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -292,6 +303,76 @@ mod commands {
     }
 
     "none".to_string()
+  }
+
+  fn categorise_issue(issue: &IssueReport) -> (&'static str, &'static str) {
+    let haystack = format!("{} {}", issue.id.to_lowercase(), issue.title.to_lowercase());
+
+    if haystack.contains("memory")
+      || haystack.contains("ram")
+      || haystack.contains("swap")
+      || haystack.contains("pressure")
+    {
+      return ("memory_pressure", "Memory pressure");
+    }
+
+    if haystack.contains("storage")
+      || haystack.contains("disk")
+      || haystack.contains("apfs snapshot")
+    {
+      return ("storage_full", "Storage full");
+    }
+
+    if haystack.contains("cpu")
+      || haystack.contains("load average")
+      || haystack.contains("process")
+      || haystack.contains("zombie")
+      || haystack.contains("orphan")
+    {
+      return ("process_load", "Heavy processes");
+    }
+
+    ("other", "Other findings")
+  }
+
+  fn build_categories(issues: &[IssueReport]) -> Vec<IssueCategory> {
+    let mut grouped: std::collections::BTreeMap<
+      &'static str,
+      (String, String, String, usize, String),
+    > = std::collections::BTreeMap::new();
+
+    for issue in issues {
+      let (cat_id, label) = categorise_issue(issue);
+      let entry = grouped.entry(cat_id).or_insert_with(|| {
+        (
+          cat_id.to_string(),
+          label.to_string(),
+          "info".to_string(),
+          0usize,
+          String::new(),
+        )
+      });
+
+      entry.3 += 1;
+      if entry.4.is_empty() {
+        entry.4 = issue.id.clone();
+      }
+
+      if severity_rank(&issue.severity) > severity_rank(&entry.2) {
+        entry.2 = issue.severity.clone();
+      }
+    }
+
+    grouped
+      .into_iter()
+      .map(|(_cat_id, (id, label, severity, count, first_issue_id))| IssueCategory {
+        id,
+        label,
+        severity,
+        count,
+        first_issue_id,
+      })
+      .collect()
   }
 
   fn enforce_snapshot_retention(app: &tauri::AppHandle) -> Result<(), String> {
@@ -780,6 +861,7 @@ mod commands {
     Ok(AnalysisReport {
       generated_at_epoch_ms: now_epoch_ms(),
       total_issues: issues.len(),
+      categories: build_categories(&issues),
       issues,
     })
   }
