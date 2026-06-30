@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +121,20 @@ pub struct CleanupResult {
   pub all_succeeded: bool,
   pub performed_at_epoch_ms: u128,
   pub audit_id: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupProgressEvent {
+  pub audit_id: String,
+  pub phase: String,
+  pub current: u32,
+  pub total: u32,
+  pub item_id: Option<String>,
+  pub path: Option<String>,
+  pub status: Option<String>,
+  pub message: String,
+  pub reclaimed_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1527,11 +1541,6 @@ mod commands {
     })
   }
 
-  fn shell_quote(value: &str) -> String {
-    let escaped = value.replace('\'', "'\\''");
-    format!("'{}'", escaped)
-  }
-
   fn detect_disk_kind(disk: &str) -> (String, bool, bool) {
     let output = Command::new("diskutil")
       .args(["info", &format!("/dev/{}", disk)])
@@ -1952,6 +1961,13 @@ mod commands {
     }
   }
 
+  fn is_cline_protected_path(path: &Path) -> bool {
+    path.components().any(|component| {
+      let text = component.as_os_str().to_string_lossy();
+      text.eq_ignore_ascii_case("cline") || text.eq_ignore_ascii_case(".cline")
+    })
+  }
+
   fn push_storage_item(
     items: &mut Vec<StorageScanItem>,
     item_counter: &mut u32,
@@ -1960,6 +1976,21 @@ mod commands {
     size_bytes: u64,
     recommendation: String,
   ) {
+    let is_cline_protected = is_cline_protected_path(path);
+    let risk_level = if is_cline_protected {
+      "high".to_string()
+    } else {
+      category.risk_level.clone()
+    };
+    let recommendation = if is_cline_protected {
+      format!(
+        "Protected Cline directory item. Xclense will not remove this automatically; review it manually. {}",
+        recommendation
+      )
+    } else {
+      recommendation
+    };
+
     *item_counter = item_counter.saturating_add(1);
     items.push(StorageScanItem {
       id: format!("scan-{}-{}", category.id, item_counter),
@@ -1968,7 +1999,7 @@ mod commands {
       size_bytes,
       modified_epoch_ms: dir_modified_epoch_ms(path),
       last_accessed_epoch_ms: dir_accessed_epoch_ms(path),
-      risk_level: category.risk_level.clone(),
+      risk_level,
       recommendation,
     });
   }
@@ -2428,32 +2459,39 @@ mod commands {
     Ok(scan_storage_categories())
   }
 
+  fn emit_cleanup_progress(app: &tauri::AppHandle, event: CleanupProgressEvent) {
+    let _ = app.emit("storage-cleanup-progress", event);
+  }
+
   fn move_to_trash(path: &Path) -> Result<(), String> {
     if !path.exists() {
       return Err(format!("path does not exist: {}", path.display()));
     }
 
-    let target = shell_quote(&path.to_string_lossy());
-    let script = format!("osascript -e 'tell application \"Finder\" to delete POSIX file {}' >/dev/null 2>&1", target);
-    let status = Command::new("sh")
-      .args(["-c", &script])
-      .status()
+    let path_text = path.to_string_lossy().to_string();
+    let output = Command::new("osascript")
+      .args([
+        "-e",
+        "on run argv",
+        "-e",
+        "set targetPath to POSIX file (item 1 of argv)",
+        "-e",
+        "tell application \"Finder\" to delete targetPath",
+        "-e",
+        "end run",
+        &path_text,
+      ])
+      .output()
       .map_err(|error| format!("failed to invoke Finder trash command: {}", error))?;
 
-    if status.success() {
-      return Ok(());
-    }
-
-    // Fallback: rm -rf for non-Finder environments (e.g. CI / headless mac).
-    let status = Command::new("rm")
-      .args(["-rf", &path.to_string_lossy()])
-      .status()
-      .map_err(|error| format!("failed to invoke rm fallback: {}", error))?;
-
-    if status.success() {
+    if output.status.success() {
       Ok(())
     } else {
-      Err(format!("rm -rf failed with status {:?}", status.code()))
+      let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+      Err(format!(
+        "Finder could not move item to Trash. Nothing was permanently deleted. {}",
+        stderr
+      ))
     }
   }
 
@@ -2493,28 +2531,103 @@ mod commands {
 
     let performed_at = now_epoch_ms();
     let audit_id = format!("cleanup-{}-{}", performed_at, request.item_ids.len());
+    let total_items = request.item_ids.len() as u32;
     let mut results: Vec<CleanupItemResult> = Vec::new();
     let mut total_reclaimed: u64 = 0;
     let mut all_succeeded = true;
 
-    for item_id in &request.item_ids {
+    emit_cleanup_progress(
+      &app,
+      CleanupProgressEvent {
+        audit_id: audit_id.clone(),
+        phase: "started".to_string(),
+        current: 0,
+        total: total_items,
+        item_id: None,
+        path: None,
+        status: None,
+        message: format!("Starting cleanup for {} selected item(s)", total_items),
+        reclaimed_bytes: 0,
+      },
+    );
+
+    for (index, item_id) in request.item_ids.iter().enumerate() {
+      let current = index as u32 + 1;
       let item = match by_id.get(item_id) {
         Some(value) => value,
         None => {
           all_succeeded = false;
+          let message = "item id did not match any item in the latest scan".to_string();
           results.push(CleanupItemResult {
             item_id: item_id.clone(),
             path: String::new(),
             status: "unknown".to_string(),
-            message: "item id did not match any item in the latest scan".to_string(),
+            message: message.clone(),
             reclaimed_bytes: 0,
             performed_at_epoch_ms: performed_at,
           });
+          emit_cleanup_progress(
+            &app,
+            CleanupProgressEvent {
+              audit_id: audit_id.clone(),
+              phase: "item_completed".to_string(),
+              current,
+              total: total_items,
+              item_id: Some(item_id.clone()),
+              path: None,
+              status: Some("unknown".to_string()),
+              message,
+              reclaimed_bytes: total_reclaimed,
+            },
+          );
           continue;
         }
       };
 
+      emit_cleanup_progress(
+        &app,
+        CleanupProgressEvent {
+          audit_id: audit_id.clone(),
+          phase: "item_started".to_string(),
+          current,
+          total: total_items,
+          item_id: Some(item.id.clone()),
+          path: Some(item.path.clone()),
+          status: Some("running".to_string()),
+          message: "Moving item to Trash…".to_string(),
+          reclaimed_bytes: total_reclaimed,
+        },
+      );
+
       let path = PathBuf::from(&item.path);
+      if is_cline_protected_path(&path) {
+        all_succeeded = false;
+        let message = "Skipped protected Cline directory item. Nothing was moved or deleted.".to_string();
+        results.push(CleanupItemResult {
+          item_id: item.id.clone(),
+          path: item.path.clone(),
+          status: "skipped".to_string(),
+          message: message.clone(),
+          reclaimed_bytes: 0,
+          performed_at_epoch_ms: performed_at,
+        });
+        emit_cleanup_progress(
+          &app,
+          CleanupProgressEvent {
+            audit_id: audit_id.clone(),
+            phase: "item_completed".to_string(),
+            current,
+            total: total_items,
+            item_id: Some(item.id.clone()),
+            path: Some(item.path.clone()),
+            status: Some("unknown".to_string()),
+            message,
+            reclaimed_bytes: total_reclaimed,
+          },
+        );
+        continue;
+      }
+
       let outcome = move_to_trash(&path);
 
       match outcome {
@@ -2528,20 +2641,64 @@ mod commands {
             reclaimed_bytes: item.size_bytes,
             performed_at_epoch_ms: performed_at,
           });
+          emit_cleanup_progress(
+            &app,
+            CleanupProgressEvent {
+              audit_id: audit_id.clone(),
+              phase: "item_completed".to_string(),
+              current,
+              total: total_items,
+              item_id: Some(item.id.clone()),
+              path: Some(item.path.clone()),
+              status: Some("succeeded".to_string()),
+              message: "Item moved to Trash.".to_string(),
+              reclaimed_bytes: total_reclaimed,
+            },
+          );
         }
         Err(error) => {
           all_succeeded = false;
+          let message = format!("Failed to remove item: {}", error);
           results.push(CleanupItemResult {
             item_id: item.id.clone(),
             path: item.path.clone(),
             status: "failed".to_string(),
-            message: format!("Failed to remove item: {}", error),
+            message: message.clone(),
             reclaimed_bytes: 0,
             performed_at_epoch_ms: performed_at,
           });
+          emit_cleanup_progress(
+            &app,
+            CleanupProgressEvent {
+              audit_id: audit_id.clone(),
+              phase: "item_completed".to_string(),
+              current,
+              total: total_items,
+              item_id: Some(item.id.clone()),
+              path: Some(item.path.clone()),
+              status: Some("failed".to_string()),
+              message,
+              reclaimed_bytes: total_reclaimed,
+            },
+          );
         }
       }
     }
+
+    emit_cleanup_progress(
+      &app,
+      CleanupProgressEvent {
+        audit_id: audit_id.clone(),
+        phase: "completed".to_string(),
+        current: total_items,
+        total: total_items,
+        item_id: None,
+        path: None,
+        status: Some(if all_succeeded { "succeeded".to_string() } else { "failed".to_string() }),
+        message: format!("Cleanup finished. Reclaimed {} bytes.", total_reclaimed),
+        reclaimed_bytes: total_reclaimed,
+      },
+    );
 
     let record = ActionAuditRecord {
       audit_id: audit_id.clone(),
