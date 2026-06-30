@@ -90,27 +90,6 @@ export function SystemHealthCard({
 		categories.length - VISIBLE_CATEGORIES,
 	);
 
-	const recommendationLines: string[] = [];
-	if (totalIssues === 0) {
-		recommendationLines.push(
-			"No urgent issues found. System is running clean.",
-		);
-	} else {
-		if (topIssueTitle) {
-			recommendationLines.push(`Top: “${topIssueTitle}”.`);
-		}
-		recommendationLines.push(
-			memoryPressurePercent >= 80 ?
-				"Memory: under sustained pressure — close heavy apps."
-			:	"Memory: pressure is comfortable.",
-		);
-		recommendationLines.push(
-			criticalCount + warningCount > 0 ?
-				`${criticalCount} critical / ${warningCount} warning awaiting action.`
-			:	"No critical or warning findings.",
-		);
-	}
-
 	const handleFixClick = (): void => {
 		if (totalIssues === 0) return;
 		if (onFixTopIssue) {
@@ -255,14 +234,7 @@ export function SystemHealthCard({
 			</div>
 
 			<div className="mt-2 flex flex-1 flex-col border-t border-white/10 pt-1">
-				<p className="text-xs font-medium text-zinc-100">Recommendations</p>
-				<ul className="mt-0.5 space-y-0.5 text-[11px] text-zinc-300">
-					{recommendationLines.map((line) => (
-						<li key={line}>• {line}</li>
-					))}
-				</ul>
-
-				<div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-tight text-zinc-300">
+				<div className="mt-0.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-tight text-zinc-300">
 					<p>
 						<span className="text-zinc-400">Load:</span>{" "}
 						{loadAverage1m.toFixed(2)} / {loadAverage5m.toFixed(2)} /{" "}

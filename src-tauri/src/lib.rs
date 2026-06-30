@@ -1124,6 +1124,309 @@ mod commands {
     let capped_limit = limit.unwrap_or(20).min(100);
     list_action_audits(&app, capped_limit)
   }
+
+  #[derive(Debug, Serialize, Deserialize, Clone)]
+  #[serde(rename_all = "camelCase")]
+  pub struct RemediationStep {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub risk_level: String,
+    pub auto_runnable: bool,
+    pub guidance: Vec<String>,
+  }
+
+  #[derive(Debug, Serialize, Deserialize, Clone)]
+  #[serde(rename_all = "camelCase")]
+  pub struct RemediationPlan {
+    pub generated_at_epoch_ms: u128,
+    pub issue_count: usize,
+    pub steps: Vec<RemediationStep>,
+    pub auto_safe_steps: Vec<String>,
+  }
+
+  #[derive(Debug, Serialize, Deserialize, Clone)]
+  #[serde(rename_all = "camelCase")]
+  pub struct RemediationStepResult {
+    pub step_id: String,
+    pub status: String,
+    pub message: String,
+    pub performed_at_epoch_ms: u128,
+  }
+
+  #[derive(Debug, Serialize, Deserialize, Clone)]
+  #[serde(rename_all = "camelCase")]
+  pub struct RemediationExecution {
+    pub requested_step_ids: Vec<String>,
+    pub results: Vec<RemediationStepResult>,
+    pub all_succeeded: bool,
+  }
+
+  fn build_safe_remediation_plan(report: &AnalysisReport) -> RemediationPlan {
+    let mut steps: Vec<RemediationStep> = Vec::new();
+
+    let has_memory_pressure = report.issues.iter().any(|issue| {
+      issue.id.contains("memory")
+        || issue.title.to_lowercase().contains("memory")
+        || issue.title.to_lowercase().contains("pressure")
+    });
+
+    let has_storage_pressure = report.issues.iter().any(|issue| {
+      issue.id.contains("storage")
+        || issue.title.to_lowercase().contains("disk")
+        || issue.title.to_lowercase().contains("storage")
+    });
+
+    let has_process_pressure = report.issues.iter().any(|issue| {
+      issue.id.contains("process")
+        || issue.id.contains("cpu")
+        || issue.title.to_lowercase().contains("process")
+        || issue.title.to_lowercase().contains("resource-heavy")
+    });
+
+    if has_memory_pressure {
+      steps.push(RemediationStep {
+        id: "free_inactive_memory".to_string(),
+        title: "Free inactive memory".to_string(),
+        description: "Ask macOS to release file-backed inactive memory pages. This is the standard, non-destructive way to recover RAM without killing apps.".to_string(),
+        risk_level: "low".to_string(),
+        auto_runnable: true,
+        guidance: vec![
+          "macOS will return inactive memory to the free pool automatically.".to_string(),
+          "No user data or running apps are affected.".to_string(),
+          "Expect a brief pause (under a second) while the kernel reclaims pages.".to_string(),
+        ],
+      });
+
+      steps.push(RemediationStep {
+        id: "close_heavy_tabs".to_string(),
+        title: "Close heavy browser tabs and apps".to_string(),
+        description: "Browser tabs and chat apps are the most common memory hogs. Closing the heaviest few usually recovers several GB.".to_string(),
+        risk_level: "low".to_string(),
+        auto_runnable: false,
+        guidance: vec![
+          "Open Activity Monitor → Memory tab and sort by Memory.".to_string(),
+          "Quit the top 1–3 non-essential apps or close heavy browser tabs.".to_string(),
+          "Re-check the health score after each one to see the effect.".to_string(),
+        ],
+      });
+
+      steps.push(RemediationStep {
+        id: "restart_browser".to_string(),
+        title: "Restart your browser".to_string(),
+        description: "Browsers leak memory over time. A clean restart typically reclaims 1–3 GB without losing bookmarks or logins.".to_string(),
+        risk_level: "low".to_string(),
+        auto_runnable: false,
+        guidance: vec![
+          "Save any unsaved work in browser tabs.".to_string(),
+          "Quit and relaunch the browser — logins are restored automatically.".to_string(),
+        ],
+      });
+    }
+
+    if has_storage_pressure {
+      steps.push(RemediationStep {
+        id: "review_storage_usage".to_string(),
+        title: "Review storage usage".to_string(),
+        description: "Open the macOS Storage settings panel to identify large apps, caches, and documents you no longer need.".to_string(),
+        risk_level: "low".to_string(),
+        auto_runnable: false,
+        guidance: vec![
+          "Open System Settings → General → Storage.".to_string(),
+          "Use the Recommendations panel to offload large files and empty trash.".to_string(),
+          "Re-check storage usage after each cleanup pass.".to_string(),
+        ],
+      });
+
+      steps.push(RemediationStep {
+        id: "clear_user_caches".to_string(),
+        title: "Clear user caches".to_string(),
+        description: "~/Library/Caches holds app caches that macOS will rebuild on demand. Safe to remove the ones you no longer need open.".to_string(),
+        risk_level: "low".to_string(),
+        auto_runnable: false,
+        guidance: vec![
+          "Quit the apps whose caches you intend to clear.".to_string(),
+          "In Finder, choose Go → Go to Folder… and enter ~/Library/Caches.".to_string(),
+          "Move the relevant cache folders to Trash, then empty it.".to_string(),
+        ],
+      });
+    }
+
+    if has_process_pressure {
+      steps.push(RemediationStep {
+        id: "review_process_candidates".to_string(),
+        title: "Review resource-heavy processes".to_string(),
+        description: "Use Activity Monitor to identify processes with sustained high CPU or memory use. Quitting one user-facing app often resolves the warning.".to_string(),
+        risk_level: "medium".to_string(),
+        auto_runnable: false,
+        guidance: vec![
+          "Open Activity Monitor → CPU tab and sort by % CPU.".to_string(),
+          "Identify non-critical apps with sustained high usage.".to_string(),
+          "Quit them normally (Cmd+Q) — avoid force-killing system processes.".to_string(),
+        ],
+      });
+    }
+
+    if steps.is_empty() {
+      steps.push(RemediationStep {
+        id: "no_action_required".to_string(),
+        title: "No action required".to_string(),
+        description: "No risky or harmful issues were detected. Your system is running within healthy limits.".to_string(),
+        risk_level: "low".to_string(),
+        auto_runnable: false,
+        guidance: vec![
+          "Xclense will keep monitoring and notify you when something changes.".to_string(),
+        ],
+      });
+    }
+
+    let auto_safe_steps: Vec<String> = steps
+      .iter()
+      .filter(|step| step.auto_runnable)
+      .map(|step| step.id.clone())
+      .collect();
+
+    RemediationPlan {
+      generated_at_epoch_ms: now_epoch_ms(),
+      issue_count: report.total_issues,
+      steps,
+      auto_safe_steps,
+    }
+  }
+
+  fn run_one_remediation_step(step_id: &str) -> RemediationStepResult {
+    let performed_at = now_epoch_ms();
+
+    match step_id {
+      "free_inactive_memory" => {
+        // macOS `purge` is the supported way to request that the kernel
+        // discard clean, inactive file-backed pages. It is documented as
+        // safe for end users and does not affect running apps.
+        let result = Command::new("/usr/bin/purge").output();
+
+        match result {
+          Ok(output) if output.status.success() => RemediationStepResult {
+            step_id: step_id.to_string(),
+            status: "succeeded".to_string(),
+            message: "Inactive memory pages were released to the free pool.".to_string(),
+            performed_at_epoch_ms: performed_at,
+          },
+          Ok(output) => RemediationStepResult {
+            step_id: step_id.to_string(),
+            status: "failed".to_string(),
+            message: format!(
+              "purge exited with status {:?}: {}",
+              output.status.code(),
+              String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            performed_at_epoch_ms: performed_at,
+          },
+          Err(error) => RemediationStepResult {
+            step_id: step_id.to_string(),
+            status: "failed".to_string(),
+            message: format!("unable to launch purge: {}", error),
+            performed_at_epoch_ms: performed_at,
+          },
+        }
+      }
+      _ => RemediationStepResult {
+        step_id: step_id.to_string(),
+        status: "skipped".to_string(),
+        message: "This step requires manual action — see the guidance in the overlay.".to_string(),
+        performed_at_epoch_ms: performed_at,
+      },
+    }
+  }
+
+  #[tauri::command]
+  pub fn get_remediation_plan(
+    report: Option<AnalysisReport>,
+  ) -> Result<RemediationPlan, String> {
+    let resolved = match report {
+      Some(value) => value,
+      None => analyze_issues()?,
+    };
+
+    Ok(build_safe_remediation_plan(&resolved))
+  }
+
+  #[tauri::command]
+  pub fn run_safe_remediation(
+    app: tauri::AppHandle,
+    step_ids: Vec<String>,
+  ) -> Result<RemediationExecution, String> {
+    if step_ids.is_empty() {
+      return Err("no remediation steps were requested".to_string());
+    }
+
+    let plan = build_safe_remediation_plan(&analyze_issues()?);
+
+    let mut results: Vec<RemediationStepResult> = Vec::new();
+    let mut all_succeeded = true;
+
+    for requested_id in &step_ids {
+      let step = plan
+        .steps
+        .iter()
+        .find(|candidate| candidate.id == *requested_id);
+
+      let result = match step {
+        Some(candidate) if candidate.auto_runnable => {
+          let outcome = run_one_remediation_step(&candidate.id);
+          if outcome.status != "succeeded" {
+            all_succeeded = false;
+          }
+          outcome
+        }
+        Some(_) => RemediationStepResult {
+          step_id: requested_id.clone(),
+          status: "skipped".to_string(),
+          message: "This step requires manual action — see the guidance in the overlay.".to_string(),
+          performed_at_epoch_ms: now_epoch_ms(),
+        },
+        None => {
+          all_succeeded = false;
+          RemediationStepResult {
+            step_id: requested_id.clone(),
+            status: "unknown".to_string(),
+            message: "step id did not match any known remediation step".to_string(),
+            performed_at_epoch_ms: now_epoch_ms(),
+          }
+        }
+      };
+
+      // Mirror the audit pattern used by manage_process_action.
+      let record = ActionAuditRecord {
+        audit_id: format!("remediation-{}-{}", result.performed_at_epoch_ms, result.step_id),
+        action: format!("remediate:{}", result.step_id),
+        pid: 0,
+        process_name: "system".to_string(),
+        decision: result.status.clone(),
+        decision_code: if result.status == "succeeded" {
+          "REMEDIATION_EXECUTED".to_string()
+        } else if result.status == "skipped" {
+          "REMEDIATION_MANUAL".to_string()
+        } else {
+          "REMEDIATION_FAILED".to_string()
+        },
+        reason: result.message.clone(),
+        risk_level: "low".to_string(),
+        requested_at_epoch_ms: result.performed_at_epoch_ms,
+        completed_at_epoch_ms: Some(now_epoch_ms()),
+        source_version: env!("CARGO_PKG_VERSION").to_string(),
+        source_context: Some("dashboard_fix_overlay".to_string()),
+      };
+      let _ = append_action_audit(&app, &record);
+
+      results.push(result);
+    }
+
+    Ok(RemediationExecution {
+      requested_step_ids: step_ids,
+      results,
+      all_succeeded,
+    })
+  }
 }
 
 pub fn run() {
@@ -1139,7 +1442,9 @@ pub fn run() {
       commands::get_report_snapshot,
       commands::export_report_snapshot,
       commands::manage_process_action,
-      commands::list_process_action_audits
+      commands::list_process_action_audits,
+      commands::get_remediation_plan,
+      commands::run_safe_remediation
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -124,6 +124,39 @@ export interface ActionAuditRecord {
 	sourceContext?: string;
 }
 
+export type RemediationRiskLevel = "low" | "medium" | "high";
+
+export interface RemediationStep {
+	id: string;
+	title: string;
+	description: string;
+	riskLevel: RemediationRiskLevel;
+	autoRunnable: boolean;
+	guidance: string[];
+}
+
+export interface RemediationPlan {
+	generatedAtEpochMs: number;
+	issueCount: number;
+	steps: RemediationStep[];
+	autoSafeSteps: string[];
+}
+
+export type RemediationStatus = "succeeded" | "failed" | "skipped" | "unknown";
+
+export interface RemediationStepResult {
+	stepId: string;
+	status: RemediationStatus;
+	message: string;
+	performedAtEpochMs: number;
+}
+
+export interface RemediationExecution {
+	requestedStepIds: string[];
+	results: RemediationStepResult[];
+	allSucceeded: boolean;
+}
+
 /**
  * Determines whether the app is running inside a Tauri runtime.
  */
@@ -226,5 +259,23 @@ export const listProcessActionAudits = async (
 	ensureTauriRuntime();
 	return invoke<ActionAuditRecord[]>("list_process_action_audits", {
 		limit,
+	});
+};
+
+export const getRemediationPlan = async (
+	report?: AnalysisReport,
+): Promise<RemediationPlan> => {
+	ensureTauriRuntime();
+	return invoke<RemediationPlan>("get_remediation_plan", {
+		report,
+	});
+};
+
+export const runSafeRemediation = async (
+	stepIds: string[],
+): Promise<RemediationExecution> => {
+	ensureTauriRuntime();
+	return invoke<RemediationExecution>("run_safe_remediation", {
+		stepIds,
 	});
 };

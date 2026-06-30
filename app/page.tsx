@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { FixOverlay } from "@/components/dashboard/cards/FixOverlay";
 import { MemoryPressureCard } from "@/components/dashboard/cards/MemoryPressureCard";
 import { StorageOverviewCard } from "@/components/dashboard/cards/StorageOverviewCard";
 import { SystemHealthCard } from "@/components/dashboard/cards/SystemHealthCard";
@@ -12,12 +13,16 @@ import { TopProcessesSection } from "@/components/dashboard/sections/TopProcesse
 import { computeHealthScore } from "@/components/dashboard/shared";
 import {
 	analyzeIssues,
+	getRemediationPlan,
 	getSystemHealth,
 	isTauriRuntime,
 	listProcesses,
+	runSafeRemediation,
 	scanStorage,
 	type AnalysisReport,
 	type ProcessInfo,
+	type RemediationPlan,
+	type RemediationStepResult,
 	type StorageSummary,
 	type SystemHealth,
 } from "@/lib/tauri-client";
@@ -44,6 +49,17 @@ export default function Home(): React.JSX.Element {
 		useState<boolean>(false);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const isRealtimeLoadingRef = useRef<boolean>(false);
+
+	const [fixOverlayOpen, setFixOverlayOpen] = useState<boolean>(false);
+	const [remediationPlan, setRemediationPlan] =
+		useState<RemediationPlan | null>(null);
+	const [isPlanLoading, setIsPlanLoading] = useState<boolean>(false);
+	const [isExecutingRemediation, setIsExecutingRemediation] =
+		useState<boolean>(false);
+	const [remediationResults, setRemediationResults] = useState<
+		RemediationStepResult[] | null
+	>(null);
+	const [remediationError, setRemediationError] = useState<string | null>(null);
 
 	const appendMemoryTrend = useCallback((value: number) => {
 		const nextValue = Math.max(0, Math.min(100, value));
@@ -238,9 +254,94 @@ export default function Home(): React.JSX.Element {
 	}, []);
 
 	const handleFixTopIssue = useCallback((): void => {
-		if (!topIssue) return;
-		handleJumpToIssue(topIssue.id);
-	}, [handleJumpToIssue, topIssue]);
+		if (!checkpointData || checkpointData.analysis.totalIssues === 0) {
+			return;
+		}
+
+		setFixOverlayOpen(true);
+		setRemediationResults(null);
+		setRemediationError(null);
+		setIsPlanLoading(true);
+
+		void getRemediationPlan(checkpointData.analysis)
+			.then((plan) => {
+				setRemediationPlan(plan);
+			})
+			.catch((error: unknown) => {
+				const message =
+					error instanceof Error ?
+						error.message
+					:	"Unable to build remediation plan";
+				setRemediationError(message);
+				setRemediationPlan(null);
+			})
+			.finally(() => {
+				setIsPlanLoading(false);
+			});
+	}, [checkpointData]);
+
+	const closeFixOverlay = useCallback((next: boolean): void => {
+		setFixOverlayOpen(next);
+		if (!next) {
+			setRemediationResults(null);
+			setRemediationError(null);
+		}
+	}, []);
+
+	const executeRemediation = useCallback(
+		async (stepIds: string[]): Promise<void> => {
+			if (stepIds.length === 0) return;
+
+			setIsExecutingRemediation(true);
+			setRemediationError(null);
+			try {
+				const execution = await runSafeRemediation(stepIds);
+				setRemediationResults(execution.results);
+				void loadCheckpointData();
+				void loadRealtimeData();
+			} catch (error: unknown) {
+				const message =
+					error instanceof Error ? error.message : "Unable to run remediation";
+				setRemediationError(message);
+			} finally {
+				setIsExecutingRemediation(false);
+			}
+		},
+		[loadCheckpointData, loadRealtimeData],
+	);
+
+	const handleRunAllSafe = useCallback((): void => {
+		if (!remediationPlan) return;
+		void executeRemediation(remediationPlan.autoSafeSteps);
+	}, [executeRemediation, remediationPlan]);
+
+	const handleRunOne = useCallback(
+		(stepId: string) => {
+			void executeRemediation([stepId]);
+		},
+		[executeRemediation],
+	);
+
+	const handleFixRescan = useCallback((): void => {
+		if (!checkpointData) return;
+		setIsPlanLoading(true);
+		setRemediationError(null);
+		void getRemediationPlan(checkpointData.analysis)
+			.then((plan) => {
+				setRemediationPlan(plan);
+				setRemediationResults(null);
+			})
+			.catch((error: unknown) => {
+				const message =
+					error instanceof Error ?
+						error.message
+					:	"Unable to build remediation plan";
+				setRemediationError(message);
+			})
+			.finally(() => {
+				setIsPlanLoading(false);
+			});
+	}, [checkpointData]);
 
 	return (
 		<div className="h-screen w-screen overflow-hidden bg-[radial-gradient(circle_at_top_right,#3347ad_0%,#11152f_40%,#0a0f24_100%)] font-sans text-zinc-100">
@@ -329,6 +430,21 @@ export default function Home(): React.JSX.Element {
 					:	null}
 				</main>
 			</div>
+
+			<FixOverlay
+				open={fixOverlayOpen}
+				onOpenChange={closeFixOverlay}
+				plan={remediationPlan}
+				score={healthScore}
+				topIssueTitle={topIssue?.title}
+				isPlanLoading={isPlanLoading}
+				isExecuting={isExecutingRemediation}
+				results={remediationResults}
+				onRunAllSafe={handleRunAllSafe}
+				onRunOne={handleRunOne}
+				onRescan={handleFixRescan}
+				errorMessage={remediationError}
+			/>
 		</div>
 	);
 }
