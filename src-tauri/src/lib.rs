@@ -1774,7 +1774,7 @@ mod commands {
       StorageCategory {
         id: "user_caches".to_string(),
         label: "User app caches".to_string(),
-        description: "Caches stored under ~/Library/Caches. Safe to clear for apps that are not running.".to_string(),
+        description: "App cache folders under ~/Library/Caches. These are usually safe to clear when apps are closed.".to_string(),
         color: "sky".to_string(),
         path_prefixes: vec!["Library/Caches".to_string()],
         risk_level: "low".to_string(),
@@ -1790,7 +1790,7 @@ mod commands {
       StorageCategory {
         id: "downloads".to_string(),
         label: "Old downloads".to_string(),
-        description: "Files in ~/Downloads that have not been opened in a long time.".to_string(),
+        description: "Files in ~/Downloads. Review before cleanup because these may be user-created files or installers.".to_string(),
         color: "amber".to_string(),
         path_prefixes: vec!["Downloads".to_string()],
         risk_level: "medium".to_string(),
@@ -1806,23 +1806,86 @@ mod commands {
       StorageCategory {
         id: "browser_cache".to_string(),
         label: "Browser caches".to_string(),
-        description: "Safari/Chrome/Firefox caches stored in containers and Library.".to_string(),
+        description: "Safari/Chrome/Firefox cache data stored in containers and Library folders.".to_string(),
         color: "rose".to_string(),
         path_prefixes: vec![
           "Library/Containers/com.apple.Safari/Data/Library/Caches".to_string(),
           "Library/Caches/com.apple.Safari".to_string(),
           "Library/Caches/Google".to_string(),
           "Library/Caches/Firefox".to_string(),
+          "Library/Application Support/Google/Chrome/Default/Cache".to_string(),
+          "Library/Application Support/Google/Chrome/Default/Code Cache".to_string(),
+          "Library/Application Support/Firefox/Profiles".to_string(),
         ],
         risk_level: "low".to_string(),
       },
       StorageCategory {
-        id: "xcode_derived".to_string(),
-        label: "Xcode derived data".to_string(),
-        description: "Build artifacts and module cache produced by Xcode.".to_string(),
+        id: "developer_artifacts".to_string(),
+        label: "Developer artifacts".to_string(),
+        description: "Xcode, simulator, build, and language package caches that can often be regenerated.".to_string(),
         color: "fuchsia".to_string(),
-        path_prefixes: vec!["Library/Developer/Xcode/DerivedData".to_string()],
+        path_prefixes: vec![
+          "Library/Developer/Xcode/DerivedData".to_string(),
+          "Library/Developer/Xcode/Archives".to_string(),
+          "Library/Developer/Xcode/iOS DeviceSupport".to_string(),
+          "Library/Developer/CoreSimulator".to_string(),
+          "Library/Caches/CocoaPods".to_string(),
+        ],
         risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "package_manager_caches".to_string(),
+        label: "Package manager caches".to_string(),
+        description: "npm, Yarn, pnpm, pip, Gradle, Maven, Cargo, and Homebrew caches. These can usually be re-downloaded.".to_string(),
+        color: "sky".to_string(),
+        path_prefixes: vec![
+          ".npm".to_string(),
+          ".yarn/cache".to_string(),
+          ".pnpm-store".to_string(),
+          ".cache".to_string(),
+          ".gradle/caches".to_string(),
+          ".m2/repository".to_string(),
+          ".cargo/registry".to_string(),
+          "Library/Caches/pip".to_string(),
+          "Library/Caches/Homebrew".to_string(),
+        ],
+        risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "app_container_caches".to_string(),
+        label: "App container caches".to_string(),
+        description: "Cache folders discovered inside app Containers and Group Containers.".to_string(),
+        color: "violet".to_string(),
+        path_prefixes: vec![],
+        risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "node_modules".to_string(),
+        label: "node_modules folders".to_string(),
+        description: "Project dependency folders. Review before cleanup because projects need reinstalling dependencies after removal.".to_string(),
+        color: "amber".to_string(),
+        path_prefixes: vec![],
+        risk_level: "medium".to_string(),
+      },
+      StorageCategory {
+        id: "large_files".to_string(),
+        label: "Large files".to_string(),
+        description: "Large archives, disk images, videos, and installers found in common user folders. Review before cleanup.".to_string(),
+        color: "rose".to_string(),
+        path_prefixes: vec![],
+        risk_level: "medium".to_string(),
+      },
+      StorageCategory {
+        id: "system_temp".to_string(),
+        label: "System temporary folders".to_string(),
+        description: "Readable temporary folders under /tmp and /private. Some items may be active, so review carefully.".to_string(),
+        color: "fuchsia".to_string(),
+        path_prefixes: vec![
+          "/tmp".to_string(),
+          "/private/tmp".to_string(),
+          "/private/var/tmp".to_string(),
+        ],
+        risk_level: "medium".to_string(),
       },
     ]
   }
@@ -1876,6 +1939,298 @@ mod commands {
     }
   }
 
+  fn category_by_id(categories: &[StorageCategory], id: &str) -> Option<StorageCategory> {
+    categories.iter().find(|category| category.id == id).cloned()
+  }
+
+  fn resolve_scan_prefix(home: &Path, prefix: &str) -> PathBuf {
+    let candidate = PathBuf::from(prefix);
+    if candidate.is_absolute() {
+      candidate
+    } else {
+      home.join(candidate)
+    }
+  }
+
+  fn push_storage_item(
+    items: &mut Vec<StorageScanItem>,
+    item_counter: &mut u32,
+    category: &StorageCategory,
+    path: &Path,
+    size_bytes: u64,
+    recommendation: String,
+  ) {
+    *item_counter = item_counter.saturating_add(1);
+    items.push(StorageScanItem {
+      id: format!("scan-{}-{}", category.id, item_counter),
+      category_id: category.id.clone(),
+      path: path.to_string_lossy().to_string(),
+      size_bytes,
+      modified_epoch_ms: dir_modified_epoch_ms(path),
+      last_accessed_epoch_ms: dir_accessed_epoch_ms(path),
+      risk_level: category.risk_level.clone(),
+      recommendation,
+    });
+  }
+
+  fn scan_direct_children(
+    category: &StorageCategory,
+    root: &Path,
+    min_size_bytes: u64,
+    items: &mut Vec<StorageScanItem>,
+    scanned: &mut u32,
+    item_counter: &mut u32,
+    recommendation: &str,
+  ) {
+    if let Ok(entries) = fs::read_dir(root) {
+      for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.exists() {
+          continue;
+        }
+        if entry.file_type().map(|file_type| file_type.is_symlink()).unwrap_or(false) {
+          continue;
+        }
+        *scanned = scanned.saturating_add(1);
+        let size_bytes = if path.is_dir() {
+          directory_size_bytes(&path)
+        } else {
+          fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0)
+        };
+        if size_bytes < min_size_bytes {
+          continue;
+        }
+        push_storage_item(
+          items,
+          item_counter,
+          category,
+          &path,
+          size_bytes,
+          recommendation.to_string(),
+        );
+      }
+    }
+  }
+
+  fn scan_single_path(
+    category: &StorageCategory,
+    path: &Path,
+    min_size_bytes: u64,
+    items: &mut Vec<StorageScanItem>,
+    scanned: &mut u32,
+    item_counter: &mut u32,
+    recommendation: &str,
+  ) {
+    if !path.exists() {
+      return;
+    }
+    *scanned = scanned.saturating_add(1);
+    let size_bytes = directory_size_bytes(path);
+    if size_bytes < min_size_bytes {
+      return;
+    }
+    push_storage_item(
+      items,
+      item_counter,
+      category,
+      path,
+      size_bytes,
+      recommendation.to_string(),
+    );
+  }
+
+  fn should_skip_deep_scan_dir(name: &str) -> bool {
+    matches!(
+      name,
+      ".git"
+        | ".svn"
+        | ".hg"
+        | "Library"
+        | "Applications"
+        | "node_modules"
+        | ".Trash"
+        | "Pictures Library.photoslibrary"
+        | "Photos Library.photoslibrary"
+    )
+  }
+
+  fn walk_for_node_modules(
+    root: &Path,
+    category: &StorageCategory,
+    items: &mut Vec<StorageScanItem>,
+    scanned: &mut u32,
+    item_counter: &mut u32,
+    seen: &mut std::collections::HashSet<String>,
+    max_depth: usize,
+    max_scanned: u32,
+  ) {
+    if max_depth == 0 || *scanned >= max_scanned || !root.is_dir() {
+      return;
+    }
+
+    let entries = match fs::read_dir(root) {
+      Ok(value) => value,
+      Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+      if *scanned >= max_scanned {
+        break;
+      }
+      let path = entry.path();
+      let file_type = match entry.file_type() {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+      if file_type.is_symlink() || !file_type.is_dir() {
+        continue;
+      }
+      *scanned = scanned.saturating_add(1);
+      let name = entry.file_name().to_string_lossy().to_string();
+      if name == "node_modules" {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+          let size_bytes = directory_size_bytes(&path);
+          if size_bytes >= 20 * 1024 * 1024 {
+            push_storage_item(
+              items,
+              item_counter,
+              category,
+              &path,
+              size_bytes,
+              "Review this project dependency folder. Delete only if you can reinstall with npm, Yarn, or pnpm.".to_string(),
+            );
+          }
+        }
+        continue;
+      }
+      if should_skip_deep_scan_dir(&name) || name.ends_with(".app") || name.ends_with(".framework") {
+        continue;
+      }
+      walk_for_node_modules(
+        &path,
+        category,
+        items,
+        scanned,
+        item_counter,
+        seen,
+        max_depth - 1,
+        max_scanned,
+      );
+    }
+  }
+
+  fn is_large_file_candidate(path: &Path) -> bool {
+    let extension = path
+      .extension()
+      .and_then(|value| value.to_str())
+      .unwrap_or("")
+      .to_ascii_lowercase();
+    matches!(
+      extension.as_str(),
+      "dmg" | "pkg" | "zip" | "tar" | "gz" | "xz" | "7z" | "rar" | "iso" | "mp4" | "mov" | "mkv" | "avi"
+    )
+  }
+
+  fn walk_for_large_files(
+    root: &Path,
+    category: &StorageCategory,
+    items: &mut Vec<StorageScanItem>,
+    scanned: &mut u32,
+    item_counter: &mut u32,
+    seen: &mut std::collections::HashSet<String>,
+    max_depth: usize,
+    max_scanned: u32,
+  ) {
+    if max_depth == 0 || *scanned >= max_scanned || !root.is_dir() {
+      return;
+    }
+
+    let entries = match fs::read_dir(root) {
+      Ok(value) => value,
+      Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+      if *scanned >= max_scanned {
+        break;
+      }
+      let path = entry.path();
+      let file_type = match entry.file_type() {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+      if file_type.is_symlink() {
+        continue;
+      }
+      *scanned = scanned.saturating_add(1);
+      if file_type.is_file() {
+        let size_bytes = fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
+        if size_bytes >= 500 * 1024 * 1024 && is_large_file_candidate(&path) {
+          let key = path.to_string_lossy().to_string();
+          if seen.insert(key) {
+            push_storage_item(
+              items,
+              item_counter,
+              category,
+              &path,
+              size_bytes,
+              "Large archive, installer, or media file. Review before sending it to Trash.".to_string(),
+            );
+          }
+        }
+      } else if file_type.is_dir() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_deep_scan_dir(&name) || name.ends_with(".app") || name.ends_with(".photoslibrary") {
+          continue;
+        }
+        walk_for_large_files(
+          &path,
+          category,
+          items,
+          scanned,
+          item_counter,
+          seen,
+          max_depth - 1,
+          max_scanned,
+        );
+      }
+    }
+  }
+
+  fn scan_app_container_caches(
+    home: &Path,
+    category: &StorageCategory,
+    items: &mut Vec<StorageScanItem>,
+    scanned: &mut u32,
+    item_counter: &mut u32,
+  ) {
+    let roots = [home.join("Library/Containers"), home.join("Library/Group Containers")];
+    for root in roots {
+      if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+          let cache_path = entry.path().join("Data/Library/Caches");
+          if !cache_path.exists() {
+            continue;
+          }
+          *scanned = scanned.saturating_add(1);
+          let size_bytes = directory_size_bytes(&cache_path);
+          if size_bytes < 10 * 1024 * 1024 {
+            continue;
+          }
+          push_storage_item(
+            items,
+            item_counter,
+            category,
+            &cache_path,
+            size_bytes,
+            "App container cache. Safe to clean after quitting the related app; macOS/app can regenerate it.".to_string(),
+          );
+        }
+      }
+    }
+  }
+
   fn scan_storage_categories() -> StorageScanResult {
     let started_at = now_epoch_ms();
     let categories = default_storage_categories();
@@ -1898,70 +2253,161 @@ mod commands {
     let mut item_counter: u32 = 0;
 
     for category in &categories {
+      if category.id == "app_container_caches"
+        || category.id == "node_modules"
+        || category.id == "large_files"
+      {
+        continue;
+      }
+
       for prefix in &category.path_prefixes {
-        let candidate = home.join(prefix);
+        let candidate = resolve_scan_prefix(&home, prefix);
         if !candidate.exists() {
           continue;
         }
 
-        // For non-Downloads/non-Trash categories, treat the prefix folder as a single item.
-        // For Downloads and Trash, we list children so the user can pick individually.
-        if category.id == "downloads" || category.id == "trash" {
-          if let Ok(entries) = fs::read_dir(&candidate) {
-            for entry in entries.flatten() {
-              let path = entry.path();
-              if !path.exists() {
-                continue;
-              }
-              scanned = scanned.saturating_add(1);
-              let size_bytes = if path.is_dir() {
-                directory_size_bytes(&path)
-              } else {
-                fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-              };
-              if size_bytes < 5 * 1024 * 1024 {
-                // Skip items under 5 MB to keep the list useful.
-                continue;
-              }
-              item_counter = item_counter.saturating_add(1);
-              items.push(StorageScanItem {
-                id: format!("scan-{}-{}", category.id, item_counter),
-                category_id: category.id.clone(),
-                path: path.to_string_lossy().to_string(),
-                size_bytes,
-                modified_epoch_ms: dir_modified_epoch_ms(&path),
-                last_accessed_epoch_ms: dir_accessed_epoch_ms(&path),
-                risk_level: category.risk_level.clone(),
-                recommendation: format!(
-                  "Review and remove {} items that are no longer needed.",
-                  category.label
-                ),
-              });
-            }
-          }
-        } else {
-          scanned = scanned.saturating_add(1);
-          let size_bytes = directory_size_bytes(&candidate);
-          if size_bytes < 1024 * 1024 {
-            continue;
-          }
-          item_counter = item_counter.saturating_add(1);
-          items.push(StorageScanItem {
-            id: format!("scan-{}-{}", category.id, item_counter),
-            category_id: category.id.clone(),
-            path: candidate.to_string_lossy().to_string(),
-            size_bytes,
-            modified_epoch_ms: dir_modified_epoch_ms(&candidate),
-            last_accessed_epoch_ms: dir_accessed_epoch_ms(&candidate),
-            risk_level: category.risk_level.clone(),
-            recommendation: format!(
-              "Remove the contents of this {} folder to reclaim space.",
-              category.label
-            ),
-          });
+        match category.id.as_str() {
+          "downloads" => scan_direct_children(
+            category,
+            &candidate,
+            20 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Review this download before cleanup. It may be an installer, archive, or user-created file.",
+          ),
+          "trash" => scan_direct_children(
+            category,
+            &candidate,
+            5 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Already in Trash. Send it through cleanup when you are sure it is no longer needed.",
+          ),
+          "user_caches" => scan_direct_children(
+            category,
+            &candidate,
+            10 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "App cache folder. Safe to clean after quitting the related app; it can be regenerated.",
+          ),
+          "user_logs" => scan_direct_children(
+            category,
+            &candidate,
+            5 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Old diagnostic logs. Safe to clean unless you need them for troubleshooting.",
+          ),
+          "browser_cache" => scan_single_path(
+            category,
+            &candidate,
+            10 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Browser cache. Quit the browser first; it can rebuild these files automatically.",
+          ),
+          "developer_artifacts" => scan_direct_children(
+            category,
+            &candidate,
+            20 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Developer build/simulator artifact. Review active projects first; most of this data can be regenerated.",
+          ),
+          "package_manager_caches" => scan_single_path(
+            category,
+            &candidate,
+            20 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Package manager cache. Usually safe to clean; packages can be downloaded again later.",
+          ),
+          "system_temp" => scan_direct_children(
+            category,
+            &candidate,
+            20 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Temporary system item. Review carefully and avoid cleaning files from currently running apps.",
+          ),
+          _ => scan_single_path(
+            category,
+            &candidate,
+            10 * 1024 * 1024,
+            &mut items,
+            &mut scanned,
+            &mut item_counter,
+            "Review this reclaimable storage item before cleanup.",
+          ),
         }
       }
     }
+
+    if let Some(category) = category_by_id(&categories, "app_container_caches") {
+      scan_app_container_caches(&home, &category, &mut items, &mut scanned, &mut item_counter);
+    }
+
+    if let Some(category) = category_by_id(&categories, "node_modules") {
+      let mut seen = std::collections::HashSet::new();
+      let roots = [
+        home.join("Developer"),
+        home.join("Projects"),
+        home.join("Sites"),
+        home.join("Documents"),
+        home.join("Desktop"),
+        home.join("Downloads"),
+      ];
+      for root in roots {
+        walk_for_node_modules(
+          &root,
+          &category,
+          &mut items,
+          &mut scanned,
+          &mut item_counter,
+          &mut seen,
+          8,
+          80_000,
+        );
+      }
+    }
+
+    if let Some(category) = category_by_id(&categories, "large_files") {
+      let mut seen = std::collections::HashSet::new();
+      let roots = [
+        home.join("Downloads"),
+        home.join("Desktop"),
+        home.join("Documents"),
+        home.join("Movies"),
+        home.join("Pictures"),
+        home.join("Developer"),
+        home.join("Projects"),
+        home.join("Sites"),
+      ];
+      for root in roots {
+        walk_for_large_files(
+          &root,
+          &category,
+          &mut items,
+          &mut scanned,
+          &mut item_counter,
+          &mut seen,
+          7,
+          80_000,
+        );
+      }
+    }
+
+    let mut seen_paths = std::collections::HashSet::new();
+    items.retain(|item| seen_paths.insert(item.path.clone()));
 
     // Sort largest first.
     items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
