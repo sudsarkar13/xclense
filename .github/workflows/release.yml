@@ -62,7 +62,8 @@ jobs:
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          # Both are required for the universal binary that supports Intel Macs.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache cargo registry and build
         uses: actions/cache@v6
@@ -83,11 +84,11 @@ jobs:
           # not produced and installed clients reject the update.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: yarn tauri build
+        run: yarn tauri build --target universal-apple-darwin
 
       - name: Verify the bundle carries the app icon
         run: |
-          APP="src-tauri/target/release/bundle/macos/Xclense.app"
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app"
           test -f "$APP/Contents/Resources/icon.icns" \
             || { echo "::error::Bundle is missing Resources/icon.icns — check bundle.icon in tauri.conf.json"; exit 1; }
           plutil -p "$APP/Contents/Info.plist" | grep -q CFBundleIconFile \
@@ -96,11 +97,17 @@ jobs:
       - name: Locate the DMG and updater artifacts
         id: dmg
         run: |
-          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
-          TARBALL=$(ls src-tauri/target/release/bundle/macos/*.app.tar.gz | head -1)
-          SIGFILE=$(ls src-tauri/target/release/bundle/macos/*.app.tar.gz.sig | head -1)
+          BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+          DMG=$(ls $BUNDLE/dmg/*.dmg | head -1)
+          TARBALL=$(ls $BUNDLE/macos/*.app.tar.gz | head -1)
+          SIGFILE=$(ls $BUNDLE/macos/*.app.tar.gz.sig | head -1)
           test -n "$TARBALL" && test -n "$SIGFILE" \
             || { echo "::error::Updater artifacts missing — is createUpdaterArtifacts enabled and the signing key set?"; exit 1; }
+          # A universal binary must carry both slices, or Intel users get a
+          # bundle that cannot launch while the release looks correct.
+          lipo -archs "$BUNDLE/macos/Xclense.app/Contents/MacOS/Xclense" | tee /tmp/archs
+          grep -q "x86_64" /tmp/archs && grep -q "arm64" /tmp/archs \
+            || { echo "::error::Bundle is not universal — expected both x86_64 and arm64 slices"; exit 1; }
           echo "path=$DMG" >> "$GITHUB_OUTPUT"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "sigfile=$SIGFILE" >> "$GITHUB_OUTPUT"
@@ -156,6 +163,10 @@ jobs:
             "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
               "darwin-aarch64": {
+                "signature": "$SIGNATURE",
+                "url": "$REPO_URL/releases/download/$TAG/$TARBALL_NAME"
+              },
+              "darwin-x86_64": {
                 "signature": "$SIGNATURE",
                 "url": "$REPO_URL/releases/download/$TAG/$TARBALL_NAME"
               }

@@ -13,7 +13,8 @@ Xclense ships as a **macOS Tauri desktop app**: a Next.js static export bundled 
 a Rust binary, distributed as a `.dmg` attached to a GitHub Release. There is no
 package registry to publish to — the GitHub Release *is* the distribution channel.
 
-Repository: `sudsarkar13/xclense` (private) · Default branch: `main`
+Repository: `sudsarkar13/xclense` (**public** — required so installed apps can fetch
+their own OTA updates) · Default branch: `main`
 
 ---
 
@@ -131,20 +132,33 @@ every installed client rejects the update:
 ```bash
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/xclense-updater.key)"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-yarn tauri build
+yarn tauri build --target universal-apple-darwin
 ```
 
-Artifacts land in:
+`--target universal-apple-darwin` is required: it produces the one bundle that runs on
+both Apple Silicon and Intel. Building without it silently ships an Apple-Silicon-only
+app. Both Rust targets must be installed (`rustup target add aarch64-apple-darwin
+x86_64-apple-darwin`).
+
+Artifacts land under the **target-specific** path:
 
 ```
-src-tauri/target/release/bundle/macos/Xclense.app
-src-tauri/target/release/bundle/macos/Xclense.app.tar.gz       # OTA payload
-src-tauri/target/release/bundle/macos/Xclense.app.tar.gz.sig   # OTA signature
-src-tauri/target/release/bundle/dmg/Xclense_<version>_aarch64.dmg
+src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app
+src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app.tar.gz      # OTA payload
+src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app.tar.gz.sig  # OTA signature
+src-tauri/target/universal-apple-darwin/release/bundle/dmg/Xclense_<version>_universal.dmg
 ```
 
-If the `.tar.gz.sig` is missing, the signing key was not set — fix it and rebuild
-rather than publishing, or existing installs will silently stop updating.
+Two checks before publishing, both guarding silent failures that look fine on the
+release page:
+
+```bash
+BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+# 1. Both architectures present, or Intel users get an app that will not launch.
+lipo -archs "$BUNDLE/macos/Xclense.app/Contents/MacOS/Xclense"   # expect: x86_64 arm64
+# 2. Signature present, or every installed copy silently rejects the update.
+test -f "$BUNDLE/macos/Xclense.app.tar.gz.sig" && echo signed
+```
 
 > The build is **unsigned and un-notarized**. Gatekeeper will warn testers on first
 > launch; the install instructions in `RELEASE_NOTES.md` must tell them to use
@@ -156,7 +170,7 @@ rather than publishing, or existing installs will silently stop updating.
 ### 4. Smoke-test the bundle
 
 ```bash
-open src-tauri/target/release/bundle/macos/Xclense.app
+open src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app
 ```
 
 Confirm the dashboard loads, the storage scan runs to completion with live progress,
@@ -195,7 +209,7 @@ token interpolation in the URL is needed.
 
 ```bash
 gh release create vX.Y.Z \
-  "src-tauri/target/release/bundle/dmg/Xclense_X.Y.Z_aarch64.dmg" \
+  "src-tauri/target/universal-apple-darwin/release/bundle/dmg/Xclense_X.Y.Z_universal.dmg" \
   --title "vX.Y.Z — Stable Release" \
   --notes-file RELEASE_NOTES.md \
   --repo sudsarkar13/xclense
@@ -205,7 +219,7 @@ gh release create vX.Y.Z \
 
 ```bash
 gh release create vX.Y.Z-alpha.N \
-  "src-tauri/target/release/bundle/dmg/Xclense_X.Y.Z-alpha.N_aarch64.dmg" \
+  "src-tauri/target/universal-apple-darwin/release/bundle/dmg/Xclense_X.Y.Z-alpha.N_universal.dmg" \
   --title "vX.Y.Z-alpha.N — Alpha Release" \
   --notes-file RELEASE_NOTES.md \
   --prerelease \
@@ -213,7 +227,7 @@ gh release create vX.Y.Z-alpha.N \
 ```
 
 > The `.dmg` filename embeds the version — always resolve it with
-> `ls src-tauri/target/release/bundle/dmg/` rather than assuming the exact string.
+> `ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/` rather than assuming the exact string.
 > Bundle artifacts are gitignored via `/src-tauri/target` and must NOT be committed.
 
 > **Two publishing paths, pick one.** Pushing the tag also triggers
@@ -236,7 +250,7 @@ that URL skips pre-releases, and every alpha/beta build is one. The manifest liv
 ```bash
 TAG=vX.Y.Z
 VERSION=${TAG#v}
-SIGNATURE=$(cat src-tauri/target/release/bundle/macos/Xclense.app.tar.gz.sig)
+SIGNATURE=$(cat src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app.tar.gz.sig)
 
 mkdir -p updates
 cat > updates/latest.json <<JSON

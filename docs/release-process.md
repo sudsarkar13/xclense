@@ -154,15 +154,25 @@ APPLE_TEAM_ID
 
 ### Architecture coverage
 
-The current pipeline builds for Apple Silicon (`aarch64`) only. To also serve Intel
-Macs, build a universal binary:
+From `v0.2.0-alpha.3` the pipeline builds a **universal binary** carrying both `arm64`
+and `x86_64` slices, so one `.dmg` serves Apple Silicon and Intel Macs alike:
 
 ```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
 yarn tauri build --target universal-apple-darwin
 ```
 
-This requires both `aarch64-apple-darwin` and `x86_64-apple-darwin` Rust targets to be
-installed.
+Artifacts move under `src-tauri/target/universal-apple-darwin/release/bundle/`, not
+`target/release/bundle/`. Confirm both slices are present before publishing — a
+single-architecture bundle looks completely normal on the release page and simply
+fails to launch for half your users:
+
+```bash
+lipo -archs src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app/Contents/MacOS/Xclense
+# expected: x86_64 arm64
+```
+
+`release.yml` runs this check and fails the build if either slice is missing.
 
 ---
 
@@ -203,14 +213,29 @@ Updates are signed with an Ed25519 (minisign) keypair. The **public** key is com
 into the app via `plugins.updater.pubkey` in `tauri.conf.json`; the **private** key
 signs the tarball at build time.
 
-- Private key: `~/.tauri/xclense-updater.key`, mode `600`, never in the repo
-- CI: stored as the `TAURI_SIGNING_PRIVATE_KEY` repository secret
+- Working copy: `~/.tauri/xclense-updater.key`, mode `600`, never in the repo
+- macOS login Keychain, service `Xclense Updater Signing Key`
+- iCloud Drive: `Xclense-Signing-Key/` (with a `README.txt` covering recovery)
+- CI: `TAURI_SIGNING_PRIVATE_KEY` repository secret — **write-only**, GitHub will
+  never reveal it again, so it cannot serve as a backup
 - Password: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (currently empty)
+
+Restore from the Keychain (`security` appends a newline the key file does not have):
+
+```bash
+security find-generic-password -s "Xclense Updater Signing Key" -w \
+  | perl -pe 'chomp if eof' > ~/.tauri/xclense-updater.key
+chmod 600 ~/.tauri/xclense-updater.key
+```
 
 > **Losing the private key is unrecoverable.** Every installed copy only trusts
 > signatures from this exact key. If it is lost, no future build can update any
-> existing install — every user has to reinstall from a DMG by hand. Back it up
-> somewhere durable (password manager, not just this Mac).
+> existing install — every user has to reinstall from a DMG by hand.
+>
+> Replacing the key is possible but requires planning: ship a release signed with the
+> **old** key that carries the **new** public key, wait for users to install it, and
+> only then start signing with the new key. Skipping that transitional build strands
+> everyone.
 
 An unsigned build is worse than a failed build: the release page looks correct, but
 clients silently reject the update. `release.yml` fails the run if the `.sig` file is

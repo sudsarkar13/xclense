@@ -8,6 +8,31 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [v0.2.0-alpha.3] - 2026-08-11
+
+### 🚀 Highlights & Features
+
+- **Universal Binary (Intel + Apple Silicon)**: Xclense builds with
+  `--target universal-apple-darwin`, producing a single bundle carrying both `arm64`
+  and `x86_64` slices. Verified with `lipo -archs`, which the release pipeline now
+  enforces — a single-architecture bundle is indistinguishable from a correct one on
+  the release page and simply fails to launch for Intel users.
+- **OTA Updates Reach Intel Macs**: The update manifest declared only
+  `darwin-aarch64`, so an Intel install matched no platform entry and silently never
+  updated. It now declares `darwin-x86_64` as well, both pointing at the universal
+  payload.
+
+### 🔧 Build & Release Infrastructure
+
+- Bundle artifacts moved to `src-tauri/target/universal-apple-darwin/release/bundle/`;
+  the release workflow, skill, and docs were updated to match.
+- The updater signing key is backed up in three independent locations (macOS login
+  Keychain, iCloud Drive, and the working copy) with recovery procedures that were
+  executed and verified, not merely written down. The GitHub secret is explicitly
+  documented as unusable for recovery, since GitHub never reveals a secret once set.
+
+---
+
 ## [v0.2.0-alpha.2] - 2026-08-11
 
 ### 🚀 Highlights & Features
