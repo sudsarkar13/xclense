@@ -12,6 +12,7 @@ import {
 
 import { DashboardHeader } from "@/components/dashboard/layout/DashboardHeader";
 import { DashboardNav } from "@/components/dashboard/layout/DashboardNav";
+import { useBusyWhile } from "@/lib/app-busy";
 import { StorageCleanupOverlay } from "@/components/dashboard/storage/StorageCleanupOverlay";
 import { cn } from "@/lib/utils";
 import {
@@ -75,6 +76,11 @@ export default function StoragePage(): React.JSX.Element {
 	);
 	const [cleanupError, setCleanupError] = useState<string | null>(null);
 	const [isExecuting, setIsExecuting] = useState<boolean>(false);
+
+	// Hold off an update relaunch while files are being moved to Trash, so a
+	// cleanup is never killed part-way through.
+	useBusyWhile(isExecuting, "a storage cleanup");
+	useBusyWhile(isScanning, "a storage scan");
 
 	const loadDetail = useCallback(async (): Promise<void> => {
 		if (!isTauriRuntime()) {

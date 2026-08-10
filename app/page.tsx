@@ -10,6 +10,7 @@ import { DashboardHeader } from "@/components/dashboard/layout/DashboardHeader";
 import { DashboardNav } from "@/components/dashboard/layout/DashboardNav";
 import { IssueLogsSection } from "@/components/dashboard/sections/IssueLogsSection";
 import { TopProcessesSection } from "@/components/dashboard/sections/TopProcessesSection";
+import { useBusyWhile } from "@/lib/app-busy";
 import { StorageCleanupOverlay } from "@/components/dashboard/storage/StorageCleanupOverlay";
 import { computeHealthScore } from "@/components/dashboard/shared";
 import {
@@ -73,6 +74,11 @@ export default function Home(): React.JSX.Element {
 	);
 	const [isStorageScanning, setIsStorageScanning] = useState<boolean>(false);
 	const [isStorageExecuting, setIsStorageExecuting] = useState<boolean>(false);
+
+	// Hold off an update relaunch while files are being moved to Trash, so a
+	// cleanup is never killed part-way through.
+	useBusyWhile(isStorageExecuting, "a storage cleanup");
+	useBusyWhile(isStorageScanning, "a storage scan");
 	const [storageCleanupResult, setStorageCleanupResult] =
 		useState<CleanupResult | null>(null);
 	const [storageCleanupError, setStorageCleanupError] = useState<string | null>(
