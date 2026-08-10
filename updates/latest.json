@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0-alpha.2",
+  "notes": "See https://github.com/sudsarkar13/xclense/releases/tag/v0.2.0-alpha.2",
+  "pub_date": "2026-08-10T21:12:19Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd2ZSMmdqNVJiTWdPdGxWUXRNVXpNay9EcFBTWUZwUHplSkxXZWZvLzYvbHF1My9BYnB3L3Bmcmcvc3REOWpHVTh0N0c1b0dJSG9uUThzSVFhcnpCZXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Mzk2MDUyCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CklpRmozU3NVMWhQQUVKd09OVlkydlVRbU4wL1A0citvS3pjdzU1Z3NJUmlSeEFQZE54RUFsK0NyU09hNmk4NDFWMmdyR0FjVGJNcUZUbUsvUXRuNkJBPT0K",
+      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.2/Xclense.app.tar.gz"
+    }
+  }
+}
