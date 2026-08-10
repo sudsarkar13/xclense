@@ -197,10 +197,26 @@ export interface StorageScanItem {
 	id: string;
 	categoryId: string;
 	path: string;
+	/** Human-readable name for what the item actually is. */
+	label: string;
+	/** Tool or app that owns the data. */
+	owner: string;
+	entryKind: "file" | "directory";
+	hidden: boolean;
+	/** True when the entry matched the backend's known-entry catalogue. */
+	identified: boolean;
+	/** True when Xclense refuses to clean the item automatically. */
+	protected: boolean;
+	/** True when the owning tool recreates the data by itself. */
+	regenerates: boolean;
 	sizeBytes: number;
 	modifiedEpochMs: number;
 	lastAccessedEpochMs: number;
 	riskLevel: "low" | "medium" | "high";
+	/** 0-99, higher means safer to remove. */
+	safetyScore: number;
+	/** What stops working if the item is missing. */
+	impactIfRemoved: string;
 	recommendation: string;
 }
 
@@ -211,6 +227,25 @@ export interface StorageScanResult {
 	items: StorageScanItem[];
 	categories: StorageCategory[];
 	totalRecoverableBytes: number;
+	hiddenItemCount: number;
+	protectedItemCount: number;
+}
+
+export type StorageScanPhase =
+	"started" | "category_started" | "path" | "item_found" | "completed";
+
+export interface StorageScanProgressEvent {
+	scanId: string;
+	phase: StorageScanPhase;
+	categoryId?: string | null;
+	categoryLabel?: string | null;
+	currentPath?: string | null;
+	completedStages: number;
+	totalStages: number;
+	scannedPaths: number;
+	itemsFound: number;
+	reclaimableBytes: number;
+	message: string;
 }
 
 export interface CleanupRequest {

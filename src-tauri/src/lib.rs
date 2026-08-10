@@ -74,10 +74,27 @@ pub struct StorageScanItem {
   pub id: String,
   pub category_id: String,
   pub path: String,
+  /// Human-readable name for what the item actually is.
+  pub label: String,
+  /// Tool or app that owns the data.
+  pub owner: String,
+  /// "file" or "directory".
+  pub entry_kind: String,
+  pub hidden: bool,
+  /// True when the entry matched Xclense's known-entry catalogue.
+  pub identified: bool,
+  /// True when Xclense refuses to clean the item automatically.
+  pub protected: bool,
+  /// True when the owning tool recreates the data by itself.
+  pub regenerates: bool,
   pub size_bytes: u64,
   pub modified_epoch_ms: u128,
   pub last_accessed_epoch_ms: u128,
   pub risk_level: String,
+  /// 0-99, higher means safer to remove.
+  pub safety_score: u8,
+  /// What stops working if the item is missing.
+  pub impact_if_removed: String,
   pub recommendation: String,
 }
 
@@ -90,6 +107,25 @@ pub struct StorageScanResult {
   pub items: Vec<StorageScanItem>,
   pub categories: Vec<StorageCategory>,
   pub total_recoverable_bytes: u64,
+  pub hidden_item_count: u32,
+  pub protected_item_count: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageScanProgressEvent {
+  pub scan_id: String,
+  /// "started" | "category_started" | "path" | "item_found" | "completed"
+  pub phase: String,
+  pub category_id: Option<String>,
+  pub category_label: Option<String>,
+  pub current_path: Option<String>,
+  pub completed_stages: u32,
+  pub total_stages: u32,
+  pub scanned_paths: u32,
+  pub items_found: u32,
+  pub reclaimable_bytes: u64,
+  pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1863,15 +1899,38 @@ mod commands {
         path_prefixes: vec![
           ".npm".to_string(),
           ".yarn/cache".to_string(),
+          ".yarn/berry/cache".to_string(),
           ".pnpm-store".to_string(),
+          ".bun/install/cache".to_string(),
+          ".deno".to_string(),
           ".cache".to_string(),
           ".gradle/caches".to_string(),
           ".m2/repository".to_string(),
           ".cargo/registry".to_string(),
+          ".cocoapods/repos".to_string(),
+          ".composer/cache".to_string(),
+          ".gem".to_string(),
           "Library/Caches/pip".to_string(),
           "Library/Caches/Homebrew".to_string(),
+          "Library/Caches/go-build".to_string(),
         ],
         risk_level: "low".to_string(),
+      },
+      StorageCategory {
+        id: "hidden_home".to_string(),
+        label: "Hidden home items".to_string(),
+        description: "Every dot-file and dot-folder directly inside your home folder, with the owning tool and the impact of removing it.".to_string(),
+        color: "emerald".to_string(),
+        path_prefixes: vec![],
+        risk_level: "medium".to_string(),
+      },
+      StorageCategory {
+        id: "hidden_support".to_string(),
+        label: "Hidden support data".to_string(),
+        description: "Dot-folders hidden inside ~/Library and ~/Library/Application Support that normal Finder views never show.".to_string(),
+        color: "violet".to_string(),
+        path_prefixes: vec![],
+        risk_level: "medium".to_string(),
       },
       StorageCategory {
         id: "app_container_caches".to_string(),
@@ -1882,12 +1941,28 @@ mod commands {
         risk_level: "low".to_string(),
       },
       StorageCategory {
+        id: "app_support_data".to_string(),
+        label: "App support data".to_string(),
+        description: "Large per-app folders in ~/Library/Application Support. Removing one resets that app's local state and sign-in.".to_string(),
+        color: "amber".to_string(),
+        path_prefixes: vec!["Library/Application Support".to_string()],
+        risk_level: "medium".to_string(),
+      },
+      StorageCategory {
         id: "node_modules".to_string(),
         label: "node_modules folders".to_string(),
         description: "Project dependency folders. Review before cleanup because projects need reinstalling dependencies after removal.".to_string(),
         color: "amber".to_string(),
         path_prefixes: vec![],
         risk_level: "medium".to_string(),
+      },
+      StorageCategory {
+        id: "project_build_caches".to_string(),
+        label: "Project build caches".to_string(),
+        description: "Hidden build and output folders inside projects (.next, .turbo, target, dist, __pycache__, …). Toolchains rebuild them on the next build.".to_string(),
+        color: "fuchsia".to_string(),
+        path_prefixes: vec![],
+        risk_level: "low".to_string(),
       },
       StorageCategory {
         id: "large_files".to_string(),
@@ -1912,6 +1987,211 @@ mod commands {
     ]
   }
 
+  #[derive(Clone)]
+  struct EntryProfile {
+    label: &'static str,
+    owner: &'static str,
+    risk: &'static str,
+    regenerates: bool,
+    impact: &'static str,
+    recommendation: &'static str,
+  }
+
+  fn profile(
+    label: &'static str,
+    owner: &'static str,
+    risk: &'static str,
+    regenerates: bool,
+    impact: &'static str,
+    recommendation: &'static str,
+  ) -> EntryProfile {
+    EntryProfile { label, owner, risk, regenerates, impact, recommendation }
+  }
+
+  /// Folders produced by a toolchain that are rebuilt on the next build.
+  fn build_cache_dir_name(name: &str) -> bool {
+    matches!(
+      name,
+      ".next"
+        | ".turbo"
+        | ".nuxt"
+        | ".svelte-kit"
+        | ".angular"
+        | ".astro"
+        | ".docusaurus"
+        | ".parcel-cache"
+        | ".vite"
+        | ".webpack"
+        | ".rollup.cache"
+        | ".expo"
+        | ".dart_tool"
+        | ".gradle"
+        | ".cxx"
+        | ".terraform"
+        | ".pytest_cache"
+        | ".mypy_cache"
+        | ".ruff_cache"
+        | ".tox"
+        | ".nyc_output"
+        | ".ipynb_checkpoints"
+        | "__pycache__"
+        | ".venv"
+        | "venv"
+        | "DerivedData"
+        | "Pods"
+    )
+  }
+
+  /// Known dot-entries and cache folders, with the real-world impact of removing them.
+  fn known_entry_profile(name: &str) -> Option<EntryProfile> {
+    let entry = match name {
+      // Package manager caches.
+      ".npm" => profile("npm cache", "npm", "low", true, "npm re-downloads packages the next time you install; only that first install is slower.", "Package manager cache. Usually safe to clean; packages can be downloaded again later."),
+      ".yarn" => profile("Yarn home", "Yarn", "medium", true, "Yarn's global cache and Berry releases are removed; Yarn re-downloads them, but pinned releases must be re-fetched.", "Contains Yarn's global cache plus release binaries. Safe if you have network access."),
+      ".pnpm-store" => profile("pnpm content store", "pnpm", "low", true, "pnpm re-downloads packages; existing projects keep working because links are re-created on install.", "Package manager store. Run `pnpm install` afterwards in active projects."),
+      ".cache" => profile("Shared tool cache", "CLI tools", "low", true, "Tools such as Yarn, Puppeteer, Playwright, and Hugging Face re-download their cached assets on demand.", "Shared cache folder used by many CLI tools. Safe to clean."),
+      ".bun" => profile("Bun runtime + cache", "Bun", "medium", false, "Removes the bun binary itself along with its install cache; you must reinstall Bun.", "Contains the Bun binary. Clean only the install cache inside unless you plan to reinstall Bun."),
+      ".deno" => profile("Deno cache", "Deno", "low", true, "Deno re-downloads remote modules on the next run.", "Remote module cache. Safe to clean."),
+      ".nvm" => profile("nvm Node versions", "nvm", "medium", false, "Every Node.js version installed through nvm is deleted; `node` and `npm` stop working until you reinstall a version.", "Holds installed Node.js versions. Reinstall with `nvm install` after cleaning."),
+      ".cargo" => profile("Cargo home", "Rust / Cargo", "medium", false, "Deletes installed cargo binaries plus the crates registry; rebuilds re-download crates and `cargo install` tools must be reinstalled.", "Prefer cleaning only ~/.cargo/registry instead of the whole folder."),
+      ".rustup" => profile("Rust toolchains", "rustup", "medium", false, "All installed Rust toolchains are removed; `cargo` and `rustc` stop working until you run `rustup toolchain install`.", "Holds Rust toolchains. Clean only if you can reinstall them."),
+      ".gradle" => profile("Gradle home", "Gradle", "low", true, "Gradle re-downloads dependencies and re-creates its daemon state on the next build.", "Gradle cache and daemon data. Safe to clean between builds."),
+      ".m2" => profile("Maven repository", "Maven", "low", true, "Maven re-downloads every dependency on the next build, which makes that build much slower.", "Local Maven repository. Safe but the next build re-downloads everything."),
+      ".gem" | ".rbenv" | ".rvm" => profile("Ruby toolchain data", "Ruby", "medium", false, "Installed Ruby versions and gems are removed; Ruby projects fail until you reinstall them.", "Ruby versions and gems. Reinstall before running Ruby projects again."),
+      ".pyenv" | ".conda" | ".anaconda3" | ".miniconda3" | ".virtualenvs" => profile("Python toolchain data", "Python", "medium", false, "Installed Python versions and virtual environments are removed; scripts using them stop working until recreated.", "Python runtimes/environments. Recreate environments after cleaning."),
+      ".composer" => profile("Composer cache", "Composer", "low", true, "Composer re-downloads PHP packages on the next install.", "PHP package cache. Safe to clean."),
+      ".cocoapods" => profile("CocoaPods cache", "CocoaPods", "low", true, "CocoaPods re-clones the spec repos on the next `pod install`.", "Spec repos and cache. Safe to clean; the next `pod install` is slower."),
+      ".swiftpm" => profile("Swift Package Manager cache", "Swift", "low", true, "Swift re-resolves and re-downloads packages on the next build.", "Swift package cache. Safe to clean."),
+      ".android" => profile("Android SDK data", "Android Studio", "medium", false, "Emulator images (AVDs) and SDK settings are deleted; Android Studio must re-download the SDK and you lose emulator state.", "Android SDK/AVD data. Large but expensive to re-download."),
+      ".gradle.properties" => profile("Gradle settings", "Gradle", "high", false, "Build credentials and JVM tuning for Gradle are lost.", "Gradle configuration file. Keep it."),
+
+      // Editors, AI tools, apps.
+      ".vscode" | ".vscode-insiders" => profile("VS Code user data", "VS Code", "medium", false, "Extensions installed for your user are removed and must be reinstalled; settings sync can restore them.", "VS Code extensions/state. Reinstall extensions after cleaning."),
+      ".cursor" | ".windsurf" | ".continue" | ".codeium" | ".aider" => profile("AI editor data", "AI coding tool", "medium", false, "Extensions, local indexes, and chat history for the tool are removed.", "AI editor data and local indexes. Removing it resets the tool."),
+      ".claude" => profile("Claude Code data", "Claude Code", "medium", false, "Claude Code settings, project memory, and session history are lost; the CLI keeps working with defaults.", "Claude Code configuration and history. Back it up before cleaning."),
+      ".gemini" | ".codex" | ".copilot" => profile("AI CLI data", "AI CLI tool", "medium", false, "Sign-in state, settings, and cached session history for the CLI are lost; you must authenticate again.", "AI CLI configuration and history. You will need to sign in again."),
+      ".zed" => profile("Zed editor data", "Zed", "medium", false, "Editor extensions, local state, and cached language servers are removed.", "Zed user data. Extensions are re-downloaded on next launch."),
+      ".hermes" => profile("Hermes build cache", "React Native / Hermes", "low", true, "Hermes re-downloads or rebuilds its compiler artifacts on the next React Native build.", "Hermes engine artifacts. Safe to clean; next build is slower."),
+      ".huggingface" => profile("Hugging Face cache", "Hugging Face", "medium", true, "Downloaded models and datasets are deleted and re-downloaded on demand, which can be many GB.", "Model/dataset cache. Safe but expensive to re-download."),
+      ".jupyter" | ".ipython" => profile("Notebook runtime data", "Jupyter / IPython", "medium", true, "Kernel settings, saved sessions, and REPL history are lost; Jupyter recreates defaults.", "Notebook configuration and history. Mostly regenerated."),
+      ".tldrc" | ".zcompdump" | ".zcompcache" | ".sass-cache" => profile("Shell helper cache", "Shell tooling", "low", true, "The tool rebuilds the cache the next time it runs.", "Regenerated helper cache. Safe to clean."),
+      ".ollama" => profile("Ollama models", "Ollama", "medium", false, "Every downloaded model is deleted and must be pulled again (often many GB per model).", "Downloaded LLM models. Very large, but re-downloading costs bandwidth."),
+      ".lmstudio" | ".cache/lm-studio" => profile("LM Studio models", "LM Studio", "medium", false, "Downloaded local models are deleted and must be re-downloaded.", "Local model store. Large; re-download costs bandwidth."),
+      ".docker" => profile("Docker CLI config", "Docker", "high", false, "Registry credentials and CLI context configuration are lost; `docker push/pull` to private registries fails until you log in again.", "Holds registry credentials. Keep it; clean Docker disk images from Docker Desktop instead."),
+      ".colima" | ".lima" | ".minikube" | ".vagrant.d" | ".podman" => profile("Local VM/cluster data", "Container tooling", "medium", false, "Local VMs or Kubernetes clusters and their disks are destroyed; you must recreate them.", "Local VM/cluster state. Recreate the environment after cleaning."),
+      ".terraform.d" => profile("Terraform plugin cache", "Terraform", "medium", true, "Provider plugins re-download on the next `terraform init`; stored credentials for Terraform Cloud are lost.", "Plugin cache plus credentials. Check for a credentials file first."),
+      ".oh-my-zsh" | ".antigen" | ".zprezto" | ".zinit" => profile("Zsh framework", "Zsh", "medium", false, "Your prompt, themes, and shell plugins stop working until the framework is reinstalled.", "Shell framework. Reinstall before opening a new terminal."),
+      ".expo" => profile("Expo cache", "Expo", "low", true, "Expo rebuilds its cache on the next start.", "Build cache. Safe to clean."),
+      ".electron" | ".electron-gyp" | ".node-gyp" => profile("Native build toolchain cache", "Node native builds", "low", true, "Headers and prebuilt binaries re-download the next time a native module is compiled.", "Native build cache. Safe to clean."),
+      ".cups" | ".fontconfig" => profile("System helper cache", "macOS", "low", true, "The service rebuilds this automatically.", "Helper cache. Safe to clean."),
+      ".Trash" => profile("Trash", "Finder", "medium", false, "Items already in the Trash are permanently removed.", "Empty only when you are sure nothing here is needed."),
+      ".DS_Store" => profile("Finder view settings", "Finder", "low", true, "Finder recreates it; the folder loses its custom icon positions and view options.", "Finder metadata. Safe to remove."),
+      ".CFUserTextEncoding" => profile("Text encoding preference", "macOS", "medium", true, "macOS recreates it at next login; a wrong locale can briefly affect terminal encoding.", "Tiny macOS preference file. Not worth cleaning."),
+
+      // Histories — safe but you lose recall.
+      ".zsh_history" | ".bash_history" | ".python_history" | ".node_repl_history" | ".psql_history"
+      | ".sqlite_history" | ".lesshst" | ".viminfo" | ".wget-hsts" => profile("Shell/tool history", "Shell", "medium", true, "Only your command history is lost — nothing stops working, but past commands can no longer be recalled.", "Command history. Safe to remove if you do not need past commands."),
+
+      // Credentials and configuration — never auto-clean.
+      ".ssh" => profile("SSH keys", "OpenSSH", "high", false, "Private keys and known-hosts are destroyed; Git over SSH and every server login using these keys stops working and cannot be recovered.", "Never clean automatically. Back up before touching this folder."),
+      ".gnupg" => profile("GPG keyring", "GnuPG", "high", false, "Private GPG keys are destroyed; signed commits and encrypted files become unrecoverable.", "Never clean automatically. Back up your keyring first."),
+      ".aws" | ".azure" | ".gcloud" | ".oci" => profile("Cloud credentials", "Cloud CLI", "high", false, "Access keys and CLI profiles are removed; deployments and CLI commands fail until you re-authenticate.", "Contains cloud credentials. Keep it."),
+      ".kube" => profile("Kubernetes config", "kubectl", "high", false, "Cluster contexts and certificates are removed; `kubectl` loses access to every cluster.", "Cluster credentials. Keep it."),
+      ".config" => profile("XDG config root", "Many CLI tools", "high", false, "Shared configuration for dozens of CLI tools (gh, nvim, raycast, …) is lost, including some tokens.", "Configuration root. Clean individual subfolders instead."),
+      ".local" => profile("User binaries and data", "User installs", "high", false, "User-installed executables in ~/.local/bin and app data in ~/.local/share are removed; pipx/uv tools stop working.", "Holds user-installed programs. Clean specific subfolders instead."),
+      ".zshrc" | ".zprofile" | ".zshenv" | ".zlogin" | ".bashrc" | ".bash_profile" | ".profile"
+      | ".inputrc" | ".vimrc" | ".tmux.conf" | ".curlrc" | ".wgetrc" | ".editorconfig" => profile("Shell/tool configuration", "Shell", "high", false, "Your shell or tool loses its configuration: PATH entries, aliases, and environment variables stop being applied in new sessions.", "Configuration file. Keep it; it reclaims almost no space anyway."),
+      ".gitconfig" | ".gitignore_global" | ".git-credentials" | ".netrc" | ".npmrc" | ".yarnrc"
+      | ".yarnrc.yml" | ".pypirc" | ".gemrc" => profile("Tool credentials/config", "Git & package tools", "high", false, "Identity, registry tokens, and auth settings are lost; pushes and private-registry installs start failing.", "Holds credentials or identity. Keep it."),
+
+      _ => return None,
+    };
+    Some(entry)
+  }
+
+  fn category_default_profile(category_id: &str) -> EntryProfile {
+    match category_id {
+      "user_caches" => profile("App cache", "Installed app", "low", true, "The app rebuilds this cache on next launch; the first launch is slower and some previews reload.", "App cache folder. Safe to clean after quitting the related app."),
+      "user_logs" => profile("App logs", "Installed app", "low", true, "Only diagnostic history is lost; apps recreate log files as they run.", "Old diagnostic logs. Safe unless you need them for troubleshooting."),
+      "browser_cache" => profile("Browser cache", "Web browser", "low", true, "The browser re-downloads cached pages and images; sessions and bookmarks are untouched.", "Browser cache. Quit the browser first; it rebuilds automatically."),
+      "developer_artifacts" => profile("Developer artifact", "Xcode / dev tools", "low", true, "Builds and simulator data are recreated on the next build; the next build is slower.", "Developer build artifact. Most of this data can be regenerated."),
+      "package_manager_caches" => profile("Package manager cache", "Package manager", "low", true, "Packages are re-downloaded on the next install.", "Package manager cache. Usually safe to clean."),
+      "app_container_caches" => profile("Sandboxed app cache", "Sandboxed app", "low", true, "The app regenerates its cache after you reopen it.", "App container cache. Safe to clean after quitting the app."),
+      "app_support_data" => profile("App support data", "Installed app", "medium", false, "The app is reset to a fresh state: local databases, sign-in, and offline content are gone (cloud data can re-sync).", "App data folder — not a cache. Sign-in and local state are lost."),
+      "node_modules" => profile("Project dependencies", "Node project", "medium", true, "The project cannot build or run until `npm install` (or yarn/pnpm) is run again.", "Project dependency folder. Delete only if you can reinstall."),
+      "project_build_caches" => profile("Project build output", "Project toolchain", "low", true, "The toolchain regenerates it on the next build; only build time is lost.", "Build output folder. Safe to clean; rebuild afterwards."),
+      "downloads" => profile("Downloaded file", "You", "medium", false, "The file is gone from Downloads; installers and archives must be downloaded again, and user-created files may be unrecoverable.", "Review this download before cleanup."),
+      "trash" => profile("Trashed item", "Finder", "medium", false, "The item leaves the Trash permanently.", "Already in Trash. Remove when you are sure it is not needed."),
+      "large_files" => profile("Large file", "You", "medium", false, "The file is removed from disk; media and installers must be re-obtained.", "Large archive, installer, or media file. Review carefully."),
+      "system_temp" => profile("Temporary item", "macOS / apps", "medium", true, "Usually recreated automatically, but a running app can lose in-flight work.", "Temporary system item. Avoid cleaning files from running apps."),
+      "hidden_home" => profile("Hidden home item", "Unidentified tool", "medium", false, "An unrecognised tool owns this folder; it may lose settings, cached data, or credentials.", "Unrecognised hidden item — open it before cleaning."),
+      "hidden_support" => profile("Hidden support data", "Installed app", "medium", false, "Hidden per-app state is removed; the owning app may reset or re-sync.", "Hidden app data folder. Review before cleaning."),
+      _ => profile("Storage item", "Unknown", "medium", false, "Impact is unknown; review the path before removing it.", "Review this reclaimable storage item before cleanup."),
+    }
+  }
+
+  /// Paths Xclense refuses to clean automatically, with the reason shown in the UI.
+  fn protected_path_reason(path: &Path) -> Option<String> {
+    for component in path.components() {
+      let text = component.as_os_str().to_string_lossy().to_string();
+      if text.eq_ignore_ascii_case("cline") || text.eq_ignore_ascii_case(".cline") {
+        return Some(
+          "Protected Cline directory item. Xclense will not remove this automatically.".to_string(),
+        );
+      }
+      let reason = match text.as_str() {
+        ".ssh" => "Protected: SSH private keys and known-hosts.",
+        ".gnupg" => "Protected: GPG keyring and private keys.",
+        ".aws" | ".azure" | ".gcloud" | ".oci" => "Protected: cloud CLI credentials.",
+        ".kube" => "Protected: Kubernetes cluster credentials.",
+        ".docker" => "Protected: Docker registry credentials and contexts.",
+        ".config" => "Protected: shared configuration root for many CLI tools.",
+        ".local" => "Protected: user-installed binaries and application data.",
+        "Keychains" => "Protected: macOS keychain data.",
+        "MobileSync" => "Protected: iOS device backups.",
+        _ => "",
+      };
+      if !reason.is_empty() {
+        return Some(format!("{} Xclense will not remove it automatically.", reason));
+      }
+    }
+
+    let name = path.file_name()?.to_string_lossy().to_string();
+    let is_protected_file = matches!(
+      name.as_str(),
+      ".zshrc"
+        | ".zprofile"
+        | ".zshenv"
+        | ".zlogin"
+        | ".bashrc"
+        | ".bash_profile"
+        | ".profile"
+        | ".inputrc"
+        | ".vimrc"
+        | ".tmux.conf"
+        | ".curlrc"
+        | ".wgetrc"
+        | ".editorconfig"
+        | ".gitconfig"
+        | ".gitignore_global"
+        | ".git-credentials"
+        | ".netrc"
+        | ".npmrc"
+        | ".yarnrc"
+        | ".yarnrc.yml"
+        | ".pypirc"
+        | ".gemrc"
+        | ".gradle.properties"
+    );
+    if is_protected_file {
+      return Some(
+        "Protected: configuration or credential file. Xclense will not remove it automatically."
+          .to_string(),
+      );
+    }
+    None
+  }
+
   fn directory_size_bytes(path: &Path) -> u64 {
     let output = Command::new("du").args(["-sk", "-s"]).arg(path).output();
     match output {
@@ -1921,6 +2201,14 @@ mod commands {
         first.parse::<u64>().unwrap_or(0).saturating_mul(1024)
       }
       _ => 0,
+    }
+  }
+
+  fn entry_size_bytes(path: &Path, is_dir: bool) -> u64 {
+    if is_dir {
+      directory_size_bytes(path)
+    } else {
+      fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
     }
   }
 
@@ -1974,113 +2262,356 @@ mod commands {
     }
   }
 
-  fn is_cline_protected_path(path: &Path) -> bool {
-    path.components().any(|component| {
-      let text = component.as_os_str().to_string_lossy();
-      text.eq_ignore_ascii_case("cline") || text.eq_ignore_ascii_case(".cline")
-    })
+  /// Higher is safer to delete. Combines the risk level, whether the tool
+  /// regenerates the data, and how recently the item was touched.
+  fn safety_score_for(risk: &str, regenerates: bool, protected: bool, modified_epoch_ms: u128) -> u8 {
+    if protected {
+      return 0;
+    }
+    let mut score: i32 = match risk {
+      "low" => 80,
+      "medium" => 45,
+      _ => 12,
+    };
+    if regenerates {
+      score += 14;
+    }
+    let now = now_epoch_ms();
+    if modified_epoch_ms > 0 && now > modified_epoch_ms {
+      let age_days = (now - modified_epoch_ms) / (24 * 60 * 60 * 1000);
+      if age_days < 1 {
+        score -= 18;
+      } else if age_days < 7 {
+        score -= 8;
+      } else if age_days > 180 {
+        score += 6;
+      }
+    }
+    score.clamp(0, 99) as u8
   }
 
-  fn push_storage_item(
-    items: &mut Vec<StorageScanItem>,
-    item_counter: &mut u32,
-    category: &StorageCategory,
-    path: &Path,
-    size_bytes: u64,
-    recommendation: String,
-  ) {
-    let is_cline_protected = is_cline_protected_path(path);
-    let risk_level = if is_cline_protected {
-      "high".to_string()
-    } else {
-      category.risk_level.clone()
-    };
-    let recommendation = if is_cline_protected {
-      format!(
-        "Protected Cline directory item. Xclense will not remove this automatically; review it manually. {}",
-        recommendation
-      )
-    } else {
-      recommendation
-    };
+  struct ScanCtx<'a> {
+    app: Option<&'a tauri::AppHandle>,
+    scan_id: String,
+    items: Vec<StorageScanItem>,
+    accepted: Vec<PathBuf>,
+    scanned: u32,
+    item_counter: u32,
+    reclaimable_bytes: u64,
+    stage_index: u32,
+    stage_total: u32,
+    stage_label: String,
+    stage_category_id: String,
+    last_emit_ms: u128,
+  }
 
-    *item_counter = item_counter.saturating_add(1);
-    items.push(StorageScanItem {
-      id: format!("scan-{}-{}", category.id, item_counter),
-      category_id: category.id.clone(),
-      path: path.to_string_lossy().to_string(),
-      size_bytes,
-      modified_epoch_ms: dir_modified_epoch_ms(path),
-      last_accessed_epoch_ms: dir_accessed_epoch_ms(path),
-      risk_level,
-      recommendation,
-    });
+  impl<'a> ScanCtx<'a> {
+    fn new(app: Option<&'a tauri::AppHandle>, stage_total: u32) -> Self {
+      Self {
+        app,
+        scan_id: format!("scan-{}", now_epoch_ms()),
+        items: Vec::new(),
+        accepted: Vec::new(),
+        scanned: 0,
+        item_counter: 0,
+        reclaimable_bytes: 0,
+        stage_index: 0,
+        stage_total,
+        stage_label: "Preparing".to_string(),
+        stage_category_id: String::new(),
+        last_emit_ms: 0,
+      }
+    }
+
+    fn emit(&mut self, phase: &str, current_path: Option<String>, message: String, force: bool) {
+      let app = match self.app {
+        Some(value) => value,
+        None => return,
+      };
+      let now = now_epoch_ms();
+      if !force && now.saturating_sub(self.last_emit_ms) < 60 {
+        return;
+      }
+      self.last_emit_ms = now;
+      let _ = app.emit(
+        "storage-scan-progress",
+        StorageScanProgressEvent {
+          scan_id: self.scan_id.clone(),
+          phase: phase.to_string(),
+          category_id: if self.stage_category_id.is_empty() {
+            None
+          } else {
+            Some(self.stage_category_id.clone())
+          },
+          category_label: Some(self.stage_label.clone()),
+          current_path,
+          completed_stages: self.stage_index,
+          total_stages: self.stage_total,
+          scanned_paths: self.scanned,
+          items_found: self.items.len() as u32,
+          reclaimable_bytes: self.reclaimable_bytes,
+          message,
+        },
+      );
+    }
+
+    fn begin_stage(&mut self, category: &StorageCategory) {
+      self.stage_index = self.stage_index.saturating_add(1);
+      self.stage_label = category.label.clone();
+      self.stage_category_id = category.id.clone();
+      let message = format!("Scanning {}…", category.label);
+      self.emit("category_started", None, message, true);
+    }
+
+    fn note_path(&mut self, path: &Path) {
+      self.scanned = self.scanned.saturating_add(1);
+      let text = path.to_string_lossy().to_string();
+      self.emit("path", Some(text), format!("Reading {}", self.stage_label), false);
+    }
+
+    /// Skips paths that overlap an item already recorded, so nested folders are
+    /// never counted twice in the reclaimable total.
+    fn overlaps_accepted(&self, path: &Path) -> bool {
+      self
+        .accepted
+        .iter()
+        .any(|existing| path.starts_with(existing) || existing.starts_with(path))
+    }
+
+    fn push_item(
+      &mut self,
+      category: &StorageCategory,
+      path: &Path,
+      size_bytes: u64,
+      is_dir: bool,
+      fallback_recommendation: &str,
+    ) {
+      if self.overlaps_accepted(path) {
+        return;
+      }
+
+      let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+      let hidden = name.starts_with('.');
+      let known = known_entry_profile(&name);
+      let base = known.clone().unwrap_or_else(|| category_default_profile(&category.id));
+
+      let mut risk = base.risk.to_string();
+      // Unknown hidden files in the home folder are configuration far more
+      // often than they are junk, so they are treated conservatively.
+      let unknown_home_dotfile = hidden && !is_dir && category.id == "hidden_home";
+      if known.is_none() && (unknown_home_dotfile || category.risk_level == "high") {
+        risk = "high".to_string();
+      }
+
+      let protected_reason = protected_path_reason(path);
+      let protected = protected_reason.is_some();
+      if protected {
+        risk = "high".to_string();
+      }
+
+      let modified_epoch_ms = dir_modified_epoch_ms(path);
+      let recommendation = match &protected_reason {
+        Some(reason) => format!("{} {}", reason, base.recommendation),
+        None => {
+          if known.is_some() {
+            base.recommendation.to_string()
+          } else {
+            fallback_recommendation.to_string()
+          }
+        }
+      };
+
+      self.item_counter = self.item_counter.saturating_add(1);
+      self.accepted.push(path.to_path_buf());
+      // Only items the user can actually select count as reclaimable.
+      if !protected && risk != "high" {
+        self.reclaimable_bytes = self.reclaimable_bytes.saturating_add(size_bytes);
+      }
+
+      let item = StorageScanItem {
+        id: format!("scan-{}-{}", category.id, self.item_counter),
+        category_id: category.id.clone(),
+        path: path.to_string_lossy().to_string(),
+        label: base.label.to_string(),
+        owner: base.owner.to_string(),
+        entry_kind: if is_dir { "directory".to_string() } else { "file".to_string() },
+        hidden,
+        identified: known.is_some(),
+        protected,
+        regenerates: base.regenerates && !protected,
+        size_bytes,
+        modified_epoch_ms,
+        last_accessed_epoch_ms: dir_accessed_epoch_ms(path),
+        risk_level: risk.clone(),
+        safety_score: safety_score_for(&risk, base.regenerates, protected, modified_epoch_ms),
+        impact_if_removed: base.impact.to_string(),
+        recommendation,
+      };
+
+      let found_path = item.path.clone();
+      let found_label = item.label.clone();
+      self.items.push(item);
+      self.emit(
+        "item_found",
+        Some(found_path),
+        format!("Found {} ({})", found_label, format_size_short(size_bytes)),
+        true,
+      );
+    }
+  }
+
+  fn format_size_short(bytes: u64) -> String {
+    let value = bytes as f64;
+    if value >= 1024.0 * 1024.0 * 1024.0 {
+      format!("{:.1} GB", value / (1024.0 * 1024.0 * 1024.0))
+    } else if value >= 1024.0 * 1024.0 {
+      format!("{:.0} MB", value / (1024.0 * 1024.0))
+    } else {
+      format!("{} KB", bytes / 1024)
+    }
   }
 
   fn scan_direct_children(
+    ctx: &mut ScanCtx<'_>,
     category: &StorageCategory,
     root: &Path,
     min_size_bytes: u64,
-    items: &mut Vec<StorageScanItem>,
-    scanned: &mut u32,
-    item_counter: &mut u32,
     recommendation: &str,
   ) {
-    if let Ok(entries) = fs::read_dir(root) {
-      for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.exists() {
-          continue;
-        }
-        if entry.file_type().map(|file_type| file_type.is_symlink()).unwrap_or(false) {
-          continue;
-        }
-        *scanned = scanned.saturating_add(1);
-        let size_bytes = if path.is_dir() {
-          directory_size_bytes(&path)
-        } else {
-          fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0)
-        };
-        if size_bytes < min_size_bytes {
-          continue;
-        }
-        push_storage_item(
-          items,
-          item_counter,
-          category,
-          &path,
-          size_bytes,
-          recommendation.to_string(),
-        );
+    let entries = match fs::read_dir(root) {
+      Ok(value) => value,
+      Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+      let path = entry.path();
+      if !path.exists() {
+        continue;
       }
+      let file_type = match entry.file_type() {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+      if file_type.is_symlink() {
+        continue;
+      }
+      if ctx.overlaps_accepted(&path) {
+        continue;
+      }
+      ctx.note_path(&path);
+      let is_dir = file_type.is_dir();
+      let size_bytes = entry_size_bytes(&path, is_dir);
+      if size_bytes < min_size_bytes {
+        continue;
+      }
+      ctx.push_item(category, &path, size_bytes, is_dir, recommendation);
     }
   }
 
   fn scan_single_path(
+    ctx: &mut ScanCtx<'_>,
     category: &StorageCategory,
     path: &Path,
     min_size_bytes: u64,
-    items: &mut Vec<StorageScanItem>,
-    scanned: &mut u32,
-    item_counter: &mut u32,
     recommendation: &str,
   ) {
-    if !path.exists() {
+    if !path.exists() || ctx.overlaps_accepted(path) {
       return;
     }
-    *scanned = scanned.saturating_add(1);
-    let size_bytes = directory_size_bytes(path);
+    ctx.note_path(path);
+    let is_dir = path.is_dir();
+    let size_bytes = entry_size_bytes(path, is_dir);
     if size_bytes < min_size_bytes {
       return;
     }
-    push_storage_item(
-      items,
-      item_counter,
-      category,
-      path,
-      size_bytes,
-      recommendation.to_string(),
-    );
+    ctx.push_item(category, path, size_bytes, is_dir, recommendation);
+  }
+
+  /// Every dot-entry directly under the home folder, regardless of size, so the
+  /// user can audit what actually lives in their root.
+  fn scan_hidden_home_items(ctx: &mut ScanCtx<'_>, category: &StorageCategory, home: &Path) {
+    let entries = match fs::read_dir(home) {
+      Ok(value) => value,
+      Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+      let name = entry.file_name().to_string_lossy().to_string();
+      if !name.starts_with('.') || name == ".Trash" {
+        continue;
+      }
+      let file_type = match entry.file_type() {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+      if file_type.is_symlink() {
+        continue;
+      }
+      let path = entry.path();
+      if ctx.overlaps_accepted(&path) {
+        continue;
+      }
+      ctx.note_path(&path);
+      let is_dir = file_type.is_dir();
+      let size_bytes = entry_size_bytes(&path, is_dir);
+      ctx.push_item(
+        category,
+        &path,
+        size_bytes,
+        is_dir,
+        "Hidden item in your home folder. Check the impact note before removing it.",
+      );
+    }
+  }
+
+  /// Dot-folders hidden inside ~/Library and ~/Library/Application Support.
+  fn scan_hidden_support_items(ctx: &mut ScanCtx<'_>, category: &StorageCategory, home: &Path) {
+    let roots = [
+      home.join("Library"),
+      home.join("Library/Application Support"),
+      home.join("Library/Caches"),
+      home.join("Library/Containers"),
+    ];
+
+    for root in roots {
+      let entries = match fs::read_dir(&root) {
+        Ok(value) => value,
+        Err(_) => continue,
+      };
+      for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with('.') || name == ".DS_Store" || name == ".localized" {
+          continue;
+        }
+        let file_type = match entry.file_type() {
+          Ok(value) => value,
+          Err(_) => continue,
+        };
+        if file_type.is_symlink() {
+          continue;
+        }
+        let path = entry.path();
+        if ctx.overlaps_accepted(&path) {
+          continue;
+        }
+        ctx.note_path(&path);
+        let is_dir = file_type.is_dir();
+        let size_bytes = entry_size_bytes(&path, is_dir);
+        if size_bytes < 1024 * 1024 {
+          continue;
+        }
+        ctx.push_item(
+          category,
+          &path,
+          size_bytes,
+          is_dir,
+          "Hidden support folder. Identify the owning app before removing it.",
+        );
+      }
+    }
   }
 
   fn should_skip_deep_scan_dir(name: &str) -> bool {
@@ -2098,17 +2629,17 @@ mod commands {
     )
   }
 
-  fn walk_for_node_modules(
+  /// Walks project roots once, collecting node_modules folders and hidden build
+  /// caches in the same pass.
+  fn walk_project_dirs(
+    ctx: &mut ScanCtx<'_>,
     root: &Path,
-    category: &StorageCategory,
-    items: &mut Vec<StorageScanItem>,
-    scanned: &mut u32,
-    item_counter: &mut u32,
-    seen: &mut std::collections::HashSet<String>,
+    node_modules_category: Option<&StorageCategory>,
+    build_cache_category: Option<&StorageCategory>,
     max_depth: usize,
     max_scanned: u32,
   ) {
-    if max_depth == 0 || *scanned >= max_scanned || !root.is_dir() {
+    if max_depth == 0 || ctx.scanned >= max_scanned || !root.is_dir() {
       return;
     }
 
@@ -2118,7 +2649,7 @@ mod commands {
     };
 
     for entry in entries.flatten() {
-      if *scanned >= max_scanned {
+      if ctx.scanned >= max_scanned {
         break;
       }
       let path = entry.path();
@@ -2129,35 +2660,56 @@ mod commands {
       if file_type.is_symlink() || !file_type.is_dir() {
         continue;
       }
-      *scanned = scanned.saturating_add(1);
+      ctx.note_path(&path);
       let name = entry.file_name().to_string_lossy().to_string();
+
       if name == "node_modules" {
-        let key = path.to_string_lossy().to_string();
-        if seen.insert(key) {
+        if let Some(category) = node_modules_category {
+          if ctx.overlaps_accepted(&path) {
+            continue;
+          }
           let size_bytes = directory_size_bytes(&path);
           if size_bytes >= 20 * 1024 * 1024 {
-            push_storage_item(
-              items,
-              item_counter,
+            ctx.push_item(
               category,
               &path,
               size_bytes,
-              "Review this project dependency folder. Delete only if you can reinstall with npm, Yarn, or pnpm.".to_string(),
+              true,
+              "Review this project dependency folder. Delete only if you can reinstall with npm, Yarn, or pnpm.",
             );
           }
         }
         continue;
       }
+
+      if build_cache_dir_name(&name) {
+        if let Some(category) = build_cache_category {
+          if ctx.overlaps_accepted(&path) {
+            continue;
+          }
+          let size_bytes = directory_size_bytes(&path);
+          if size_bytes >= 10 * 1024 * 1024 {
+            ctx.push_item(
+              category,
+              &path,
+              size_bytes,
+              true,
+              "Build output folder. The toolchain recreates it on the next build.",
+            );
+          }
+        }
+        continue;
+      }
+
       if should_skip_deep_scan_dir(&name) || name.ends_with(".app") || name.ends_with(".framework") {
         continue;
       }
-      walk_for_node_modules(
+
+      walk_project_dirs(
+        ctx,
         &path,
-        category,
-        items,
-        scanned,
-        item_counter,
-        seen,
+        node_modules_category,
+        build_cache_category,
         max_depth - 1,
         max_scanned,
       );
@@ -2177,16 +2729,13 @@ mod commands {
   }
 
   fn walk_for_large_files(
+    ctx: &mut ScanCtx<'_>,
     root: &Path,
     category: &StorageCategory,
-    items: &mut Vec<StorageScanItem>,
-    scanned: &mut u32,
-    item_counter: &mut u32,
-    seen: &mut std::collections::HashSet<String>,
     max_depth: usize,
     max_scanned: u32,
   ) {
-    if max_depth == 0 || *scanned >= max_scanned || !root.is_dir() {
+    if max_depth == 0 || ctx.scanned >= max_scanned || !root.is_dir() {
       return;
     }
 
@@ -2196,7 +2745,7 @@ mod commands {
     };
 
     for entry in entries.flatten() {
-      if *scanned >= max_scanned {
+      if ctx.scanned >= max_scanned {
         break;
       }
       let path = entry.path();
@@ -2207,48 +2756,29 @@ mod commands {
       if file_type.is_symlink() {
         continue;
       }
-      *scanned = scanned.saturating_add(1);
+      ctx.note_path(&path);
       if file_type.is_file() {
         let size_bytes = fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
         if size_bytes >= 500 * 1024 * 1024 && is_large_file_candidate(&path) {
-          let key = path.to_string_lossy().to_string();
-          if seen.insert(key) {
-            push_storage_item(
-              items,
-              item_counter,
-              category,
-              &path,
-              size_bytes,
-              "Large archive, installer, or media file. Review before sending it to Trash.".to_string(),
-            );
-          }
+          ctx.push_item(
+            category,
+            &path,
+            size_bytes,
+            false,
+            "Large archive, installer, or media file. Review before sending it to Trash.",
+          );
         }
       } else if file_type.is_dir() {
         let name = entry.file_name().to_string_lossy().to_string();
         if should_skip_deep_scan_dir(&name) || name.ends_with(".app") || name.ends_with(".photoslibrary") {
           continue;
         }
-        walk_for_large_files(
-          &path,
-          category,
-          items,
-          scanned,
-          item_counter,
-          seen,
-          max_depth - 1,
-          max_scanned,
-        );
+        walk_for_large_files(ctx, &path, category, max_depth - 1, max_scanned);
       }
     }
   }
 
-  fn scan_app_container_caches(
-    home: &Path,
-    category: &StorageCategory,
-    items: &mut Vec<StorageScanItem>,
-    scanned: &mut u32,
-    item_counter: &mut u32,
-  ) {
+  fn scan_app_container_caches(ctx: &mut ScanCtx<'_>, category: &StorageCategory, home: &Path) {
     let roots = [home.join("Library/Containers"), home.join("Library/Group Containers")];
     for root in roots {
       if let Ok(entries) = fs::read_dir(root) {
@@ -2257,27 +2787,37 @@ mod commands {
           if !cache_path.exists() {
             continue;
           }
-          *scanned = scanned.saturating_add(1);
+          if ctx.overlaps_accepted(&cache_path) {
+            continue;
+          }
+          ctx.note_path(&cache_path);
           let size_bytes = directory_size_bytes(&cache_path);
           if size_bytes < 10 * 1024 * 1024 {
             continue;
           }
-          push_storage_item(
-            items,
-            item_counter,
+          ctx.push_item(
             category,
             &cache_path,
             size_bytes,
-            "App container cache. Safe to clean after quitting the related app; macOS/app can regenerate it.".to_string(),
+            true,
+            "App container cache. Safe to clean after quitting the related app; macOS/app can regenerate it.",
           );
         }
       }
     }
   }
 
-  fn scan_storage_categories() -> StorageScanResult {
+  fn scan_storage_categories(app: Option<&tauri::AppHandle>) -> StorageScanResult {
     let started_at = now_epoch_ms();
     let categories = default_storage_categories();
+    let mut ctx = ScanCtx::new(app, categories.len() as u32);
+    ctx.emit(
+      "started",
+      None,
+      "Starting deep scan of storage locations…".to_string(),
+      true,
+    );
+
     let home = match home_dir() {
       Some(value) => value,
       None => {
@@ -2288,20 +2828,73 @@ mod commands {
           items: Vec::new(),
           categories,
           total_recoverable_bytes: 0,
+          hidden_item_count: 0,
+          protected_item_count: 0,
         };
       }
     };
 
-    let mut items: Vec<StorageScanItem> = Vec::new();
-    let mut scanned: u32 = 0;
-    let mut item_counter: u32 = 0;
-
     for category in &categories {
-      if category.id == "app_container_caches"
-        || category.id == "node_modules"
-        || category.id == "large_files"
-      {
-        continue;
+      ctx.begin_stage(category);
+
+      match category.id.as_str() {
+        "hidden_home" => {
+          scan_hidden_home_items(&mut ctx, category, &home);
+          continue;
+        }
+        "hidden_support" => {
+          scan_hidden_support_items(&mut ctx, category, &home);
+          continue;
+        }
+        "app_container_caches" => {
+          scan_app_container_caches(&mut ctx, category, &home);
+          continue;
+        }
+        "node_modules" | "project_build_caches" => {
+          // Both are collected in a single project walk, driven by node_modules.
+          if category.id == "node_modules" {
+            let build_cache_category = category_by_id(&categories, "project_build_caches");
+            let roots = [
+              home.join("Developer"),
+              home.join("Projects"),
+              home.join("Sites"),
+              home.join("Documents"),
+              home.join("Desktop"),
+              home.join("Downloads"),
+              home.join("repos"),
+              home.join("code"),
+              home.join("work"),
+            ];
+            for root in roots {
+              walk_project_dirs(
+                &mut ctx,
+                &root,
+                Some(category),
+                build_cache_category.as_ref(),
+                8,
+                120_000,
+              );
+            }
+          }
+          continue;
+        }
+        "large_files" => {
+          let roots = [
+            home.join("Downloads"),
+            home.join("Desktop"),
+            home.join("Documents"),
+            home.join("Movies"),
+            home.join("Pictures"),
+            home.join("Developer"),
+            home.join("Projects"),
+            home.join("Sites"),
+          ];
+          for root in roots {
+            walk_for_large_files(&mut ctx, &root, category, 7, 120_000);
+          }
+          continue;
+        }
+        _ => {}
       }
 
       for prefix in &category.path_prefixes {
@@ -2312,164 +2905,123 @@ mod commands {
 
         match category.id.as_str() {
           "downloads" => scan_direct_children(
+            &mut ctx,
             category,
             &candidate,
             20 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Review this download before cleanup. It may be an installer, archive, or user-created file.",
           ),
           "trash" => scan_direct_children(
+            &mut ctx,
             category,
             &candidate,
             5 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Already in Trash. Send it through cleanup when you are sure it is no longer needed.",
           ),
           "user_caches" => scan_direct_children(
+            &mut ctx,
             category,
             &candidate,
             10 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "App cache folder. Safe to clean after quitting the related app; it can be regenerated.",
           ),
           "user_logs" => scan_direct_children(
+            &mut ctx,
             category,
             &candidate,
             5 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Old diagnostic logs. Safe to clean unless you need them for troubleshooting.",
           ),
           "browser_cache" => scan_single_path(
+            &mut ctx,
             category,
             &candidate,
             10 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Browser cache. Quit the browser first; it can rebuild these files automatically.",
           ),
           "developer_artifacts" => scan_direct_children(
+            &mut ctx,
             category,
             &candidate,
             20 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Developer build/simulator artifact. Review active projects first; most of this data can be regenerated.",
           ),
           "package_manager_caches" => scan_single_path(
+            &mut ctx,
             category,
             &candidate,
             20 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Package manager cache. Usually safe to clean; packages can be downloaded again later.",
           ),
+          "app_support_data" => scan_direct_children(
+            &mut ctx,
+            category,
+            &candidate,
+            100 * 1024 * 1024,
+            "App data folder — not a cache. Removing it resets the app's local state.",
+          ),
           "system_temp" => scan_direct_children(
+            &mut ctx,
             category,
             &candidate,
             20 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Temporary system item. Review carefully and avoid cleaning files from currently running apps.",
           ),
           _ => scan_single_path(
+            &mut ctx,
             category,
             &candidate,
             10 * 1024 * 1024,
-            &mut items,
-            &mut scanned,
-            &mut item_counter,
             "Review this reclaimable storage item before cleanup.",
           ),
         }
       }
     }
 
-    if let Some(category) = category_by_id(&categories, "app_container_caches") {
-      scan_app_container_caches(&home, &category, &mut items, &mut scanned, &mut item_counter);
-    }
+    let scanned_paths = ctx.scanned;
+    let item_count = ctx.items.len();
 
-    if let Some(category) = category_by_id(&categories, "node_modules") {
-      let mut seen = std::collections::HashSet::new();
-      let roots = [
-        home.join("Developer"),
-        home.join("Projects"),
-        home.join("Sites"),
-        home.join("Documents"),
-        home.join("Desktop"),
-        home.join("Downloads"),
-      ];
-      for root in roots {
-        walk_for_node_modules(
-          &root,
-          &category,
-          &mut items,
-          &mut scanned,
-          &mut item_counter,
-          &mut seen,
-          8,
-          80_000,
-        );
-      }
-    }
+    ctx.stage_index = ctx.stage_total;
+    ctx.stage_label = "Complete".to_string();
+    ctx.stage_category_id = String::new();
+    ctx.emit(
+      "completed",
+      None,
+      format!(
+        "Scan complete — {} item(s) across {} location(s).",
+        item_count, scanned_paths
+      ),
+      true,
+    );
 
-    if let Some(category) = category_by_id(&categories, "large_files") {
-      let mut seen = std::collections::HashSet::new();
-      let roots = [
-        home.join("Downloads"),
-        home.join("Desktop"),
-        home.join("Documents"),
-        home.join("Movies"),
-        home.join("Pictures"),
-        home.join("Developer"),
-        home.join("Projects"),
-        home.join("Sites"),
-      ];
-      for root in roots {
-        walk_for_large_files(
-          &root,
-          &category,
-          &mut items,
-          &mut scanned,
-          &mut item_counter,
-          &mut seen,
-          7,
-          80_000,
-        );
-      }
-    }
-
-    let mut seen_paths = std::collections::HashSet::new();
-    items.retain(|item| seen_paths.insert(item.path.clone()));
-
+    let mut items = std::mem::take(&mut ctx.items);
     // Sort largest first.
     items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
-    let total_recoverable_bytes: u64 = items.iter().map(|item| item.size_bytes).sum();
+    let total_recoverable_bytes: u64 = items
+      .iter()
+      .filter(|item| !item.protected && item.risk_level != "high")
+      .map(|item| item.size_bytes)
+      .sum();
+    let hidden_item_count = items.iter().filter(|item| item.hidden).count() as u32;
+    let protected_item_count = items.iter().filter(|item| item.protected).count() as u32;
 
     StorageScanResult {
       started_at_epoch_ms: started_at,
       completed_at_epoch_ms: now_epoch_ms(),
-      scanned_paths: scanned,
+      scanned_paths,
       items,
       categories,
       total_recoverable_bytes,
+      hidden_item_count,
+      protected_item_count,
     }
   }
 
-  #[tauri::command]
-  pub fn scan_storage_for_cleanup() -> Result<StorageScanResult, String> {
-    Ok(scan_storage_categories())
+  /// Runs off the main thread so progress events reach the UI while the scan
+  /// is still walking the filesystem.
+  #[tauri::command(async)]
+  pub fn scan_storage_for_cleanup(app: tauri::AppHandle) -> Result<StorageScanResult, String> {
+    Ok(scan_storage_categories(Some(&app)))
   }
 
   fn emit_cleanup_progress(app: &tauri::AppHandle, event: CleanupProgressEvent) {
@@ -2508,7 +3060,8 @@ mod commands {
     }
   }
 
-  #[tauri::command]
+  /// Runs off the main thread so per-item progress events are delivered live.
+  #[tauri::command(async)]
   pub fn cleanup_storage_items(
     app: tauri::AppHandle,
     request: CleanupRequest,
@@ -2517,7 +3070,7 @@ mod commands {
       return Err("no items were requested for cleanup".to_string());
     }
 
-    let scan = scan_storage_categories();
+    let scan = scan_storage_categories(None);
     let by_id: std::collections::HashMap<String, &StorageScanItem> =
       scan.items.iter().map(|item| (item.id.clone(), item)).collect();
 
@@ -2613,9 +3166,9 @@ mod commands {
       );
 
       let path = PathBuf::from(&item.path);
-      if is_cline_protected_path(&path) {
+      if let Some(reason) = protected_path_reason(&path) {
         all_succeeded = false;
-        let message = "Skipped protected Cline directory item. Nothing was moved or deleted.".to_string();
+        let message = format!("Skipped protected item. Nothing was moved or deleted. {}", reason);
         results.push(CleanupItemResult {
           item_id: item.id.clone(),
           path: item.path.clone(),
@@ -2738,6 +3291,8 @@ mod commands {
       audit_id,
     })
   }
+
+
 }
 
 pub fn run() {

@@ -5,8 +5,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
 	CheckCircle2,
 	ChevronRight,
+	EyeOff,
 	Info,
 	Loader2,
+	Lock,
+	Radar,
+	RefreshCcw,
 	Sparkles,
 	Trash2,
 	XIcon,
@@ -23,6 +27,7 @@ import {
 	type CleanupResult,
 	type StorageCategory,
 	type StorageScanItem,
+	type StorageScanProgressEvent,
 } from "@/lib/tauri-client";
 import { Button } from "@/components/ui/button";
 import {
@@ -116,6 +121,24 @@ const liveStatusLabel = (status: CleanupProgressEvent["status"]): string => {
 	return "Queued";
 };
 
+const safetyBadgeClass = (score: number): string => {
+	if (score >= 70)
+		return "border-emerald-400/35 bg-emerald-500/10 text-emerald-200";
+	if (score >= 40) return "border-amber-400/35 bg-amber-500/10 text-amber-200";
+	return "border-red-400/35 bg-red-500/10 text-red-200";
+};
+
+const safetyBarClass = (score: number): string => {
+	if (score >= 70) return "bg-emerald-400";
+	if (score >= 40) return "bg-amber-400";
+	return "bg-red-400";
+};
+
+const shortenPath = (path: string, maxLength = 72): string => {
+	if (path.length <= maxLength) return path;
+	return `…${path.slice(path.length - maxLength + 1)}`;
+};
+
 const colorClass = (color: string): string => {
 	switch (color) {
 		case "sky":
@@ -155,6 +178,35 @@ export function StorageCleanupOverlay({
 		Map<string, CleanupProgressEvent["status"]>
 	>(new Map());
 	const [showProgressWindow, setShowProgressWindow] = useState<boolean>(false);
+	const [hiddenOnly, setHiddenOnly] = useState<boolean>(false);
+	const [scanProgress, setScanProgress] =
+		useState<StorageScanProgressEvent | null>(null);
+	const [recentFinds, setRecentFinds] = useState<string[]>([]);
+
+	useEffect(() => {
+		if (!open) return;
+
+		let unlisten: UnlistenFn | undefined;
+		void listen<StorageScanProgressEvent>("storage-scan-progress", (event) => {
+			const progress = event.payload;
+			setScanProgress(progress);
+			if (progress.phase === "started") {
+				setRecentFinds([]);
+			}
+			if (progress.phase === "item_found" && progress.currentPath) {
+				const found = progress.currentPath;
+				setRecentFinds((previous) =>
+					[found, ...previous.filter((entry) => entry !== found)].slice(0, 3),
+				);
+			}
+		}).then((dispose) => {
+			unlisten = dispose;
+		});
+
+		return () => {
+			unlisten?.();
+		};
+	}, [open]);
 
 	useEffect(() => {
 		if (!open && !isExecuting && !showProgressWindow) return;
@@ -213,15 +265,42 @@ export function StorageCleanupOverlay({
 	}, [scan?.categories]);
 
 	const visibleItems = useMemo(() => {
-		const items = scan?.items ?? [];
-		if (filterCategory === "all") return items;
-		return items.filter((item) => item.categoryId === filterCategory);
-	}, [scan?.items, filterCategory]);
+		let items = scan?.items ?? [];
+		if (filterCategory !== "all") {
+			items = items.filter((item) => item.categoryId === filterCategory);
+		}
+		if (hiddenOnly) {
+			items = items.filter((item) => item.hidden);
+		}
+		return items;
+	}, [scan?.items, filterCategory, hiddenOnly]);
 
 	const selectableVisibleItems = useMemo(
-		() => visibleItems.filter((item) => item.riskLevel !== "high"),
+		() =>
+			visibleItems.filter(
+				(item) => item.riskLevel !== "high" && !item.protected,
+			),
 		[visibleItems],
 	);
+
+	const hiddenCount = useMemo(
+		() => (scan?.items ?? []).filter((item) => item.hidden).length,
+		[scan?.items],
+	);
+
+	const protectedCount = useMemo(
+		() => (scan?.items ?? []).filter((item) => item.protected).length,
+		[scan?.items],
+	);
+
+	const scanPercent = useMemo(() => {
+		if (!scanProgress || scanProgress.totalStages === 0) return 0;
+		if (scanProgress.phase === "completed") return 100;
+		const raw = Math.round(
+			(scanProgress.completedStages / scanProgress.totalStages) * 100,
+		);
+		return Math.min(99, Math.max(2, raw));
+	}, [scanProgress]);
 
 	const selectedItems = useMemo(
 		() => selectableVisibleItems.filter((item) => selectedIds.has(item.id)),
@@ -294,6 +373,9 @@ export function StorageCleanupOverlay({
 			setCleanupProgress(null);
 			setLiveStatusById(new Map());
 			setShowProgressWindow(false);
+			setScanProgress(null);
+			setRecentFinds([]);
+			setHiddenOnly(false);
 		}
 		onOpenChange(next);
 	};
@@ -372,6 +454,14 @@ export function StorageCleanupOverlay({
 									{selectedItems.length} · {formatBytes(selectedBytes)}
 								</span>
 							</span>
+							<span>
+								<span className="text-zinc-400">Hidden:</span>{" "}
+								<span className="font-semibold">{hiddenCount}</span>
+							</span>
+							<span>
+								<span className="text-zinc-400">Protected:</span>{" "}
+								<span className="font-semibold">{protectedCount}</span>
+							</span>
 						</div>
 					</DialogHeader>
 
@@ -382,20 +472,85 @@ export function StorageCleanupOverlay({
 					:	null}
 
 					{isScanning ?
-						<div className="rounded-lg border border-cyan-300/25 bg-cyan-950/35 p-3 text-xs text-cyan-100 shadow-inner shadow-black/25">
-							<div className="flex items-center gap-2">
-								<Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-200" />
-								<span className="font-semibold">
-									Deep scanning storage locations…
+						<div className="xc-scan-panel relative overflow-hidden rounded-lg border border-cyan-300/25 bg-cyan-950/35 p-3 text-xs text-cyan-100 shadow-inner shadow-black/25">
+							<div className="flex items-start gap-3">
+								<span className="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center">
+									<span className="absolute inset-0 animate-ping rounded-full border border-cyan-300/40" />
+									<span className="absolute inset-1 rounded-full border border-cyan-300/25" />
+									<span className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-300/35 bg-cyan-400/10">
+										<Radar className="xc-spin-slow h-4 w-4 text-cyan-200" />
+									</span>
+								</span>
+								<div className="min-w-0 flex-1">
+									<div className="flex flex-wrap items-baseline justify-between gap-2">
+										<span className="font-semibold">
+											Deep scanning storage locations…
+										</span>
+										<span className="tabular-nums text-[11px] text-cyan-100/80">
+											Stage {Math.max(1, scanProgress?.completedStages ?? 1)} of{" "}
+											{scanProgress?.totalStages ?? 14} · {scanPercent}%
+										</span>
+									</div>
+									<p className="mt-0.5 truncate text-[11px] text-cyan-100/80">
+										{scanProgress?.categoryLabel ?
+											`Checking ${scanProgress.categoryLabel}`
+										:	"Checking caches, hidden dot-folders, developer artifacts, package manager data, node_modules, build caches, and large files."
+										}
+									</p>
+								</div>
+							</div>
+
+							<div className="mt-3 h-1.5 overflow-hidden rounded-full bg-cyan-950/80">
+								<div
+									className="xc-progress-sheen h-full rounded-full bg-gradient-to-r from-cyan-400 via-sky-300 to-emerald-300 transition-all duration-500 ease-out"
+									style={{ width: `${Math.max(scanPercent, 4)}%` }}
+								/>
+							</div>
+
+							<div className="xc-scan-window relative mt-2.5 overflow-hidden rounded-md border border-cyan-300/15 bg-black/30 px-2 py-1.5">
+								<p className="truncate font-mono text-[11px] leading-relaxed text-cyan-100/90">
+									{scanProgress?.currentPath ?
+										shortenPath(scanProgress.currentPath, 90)
+									:	"Preparing scan…"}
+								</p>
+							</div>
+
+							<div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-cyan-100/80">
+								<span>
+									<span className="text-cyan-100/55">Locations read:</span>{" "}
+									<span className="font-semibold tabular-nums">
+										{(scanProgress?.scannedPaths ?? 0).toLocaleString()}
+									</span>
+								</span>
+								<span>
+									<span className="text-cyan-100/55">Items found:</span>{" "}
+									<span className="font-semibold tabular-nums">
+										{scanProgress?.itemsFound ?? 0}
+									</span>
+								</span>
+								<span>
+									<span className="text-cyan-100/55">Reclaimable so far:</span>{" "}
+									<span className="font-semibold tabular-nums">
+										{formatBytes(scanProgress?.reclaimableBytes ?? 0)}
+									</span>
 								</span>
 							</div>
-							<p className="mt-1 text-[11px] text-cyan-100/80">
-								Checking caches, developer artifacts, package manager data,
-								node_modules folders, large files, and temporary directories.
-							</p>
-							<div className="mt-3 h-1.5 overflow-hidden rounded-full bg-cyan-950/80">
-								<div className="h-full w-1/3 animate-pulse rounded-full bg-cyan-300/80" />
-							</div>
+
+							{recentFinds.length > 0 ?
+								<ul className="mt-2 space-y-0.5">
+									{recentFinds.map((path, index) => (
+										<li
+											key={path}
+											className={cn(
+												"flex items-center gap-1.5 truncate font-mono text-[10px]",
+												index === 0 ? "text-emerald-200" : "text-cyan-100/45",
+											)}>
+											<CheckCircle2 className="h-3 w-3 shrink-0" />
+											<span className="truncate">{shortenPath(path, 84)}</span>
+										</li>
+									))}
+								</ul>
+							:	null}
 						</div>
 					: !scan ?
 						<p className="text-xs text-zinc-300">
@@ -413,6 +568,18 @@ export function StorageCleanupOverlay({
 									disabled={selectableVisibleItems.length === 0}
 									className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-zinc-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45">
 									{allSelected ? "Clear selection" : "Select all safe visible"}
+								</button>
+								<button
+									type="button"
+									onClick={() => setHiddenOnly((previous) => !previous)}
+									className={cn(
+										"inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition",
+										hiddenOnly ?
+											"border-cyan-300/40 bg-cyan-500/15 text-cyan-100"
+										:	"border-white/15 bg-white/5 text-zinc-200 hover:bg-white/10",
+									)}>
+									<EyeOff className="h-3 w-3" />
+									Hidden only ({hiddenCount})
 								</button>
 								<div className="flex flex-wrap items-center gap-1.5">
 									<button
@@ -461,7 +628,8 @@ export function StorageCleanupOverlay({
 										result?.status === "succeeded" ||
 										liveStatus === "succeeded";
 									const running = liveStatus === "running";
-									const isProtectedHighRisk = item.riskLevel === "high";
+									const isProtectedHighRisk =
+										item.riskLevel === "high" || item.protected;
 									return (
 										<div
 											key={item.id}
@@ -480,9 +648,7 @@ export function StorageCleanupOverlay({
 												disabled={hasResults || isProtectedHighRisk}
 												className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
 												title={
-													isProtectedHighRisk ?
-														"Protected Cline directory item; Xclense will not clean it automatically."
-													:	undefined
+													isProtectedHighRisk ? item.recommendation : undefined
 												}
 												aria-label={`Select ${item.path}`}
 											/>
@@ -510,6 +676,41 @@ export function StorageCleanupOverlay({
 														)}>
 														{item.riskLevel} risk
 													</span>
+													<span
+														className={cn(
+															"inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] tabular-nums",
+															safetyBadgeClass(item.safetyScore),
+														)}
+														title="Safe-to-remove score: higher means the data is regenerated or non-essential.">
+														<span className="inline-block h-1 w-6 overflow-hidden rounded-full bg-black/40">
+															<span
+																className={cn(
+																	"block h-full rounded-full",
+																	safetyBarClass(item.safetyScore),
+																)}
+																style={{ width: `${item.safetyScore}%` }}
+															/>
+														</span>
+														safe {item.safetyScore}
+													</span>
+													{item.hidden ?
+														<span className="inline-flex items-center gap-1 rounded-full border border-cyan-300/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] text-cyan-100">
+															<EyeOff className="h-2.5 w-2.5" />
+															hidden
+														</span>
+													:	null}
+													{item.protected ?
+														<span className="inline-flex items-center gap-1 rounded-full border border-red-400/35 bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-200">
+															<Lock className="h-2.5 w-2.5" />
+															protected
+														</span>
+													:	null}
+													{item.regenerates ?
+														<span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
+															<RefreshCcw className="h-2.5 w-2.5" />
+															rebuilds itself
+														</span>
+													:	null}
 													<span className="text-[11px] text-zinc-400">
 														{formatTimestamp(item.modifiedEpochMs)}
 													</span>
@@ -541,11 +742,22 @@ export function StorageCleanupOverlay({
 														</span>
 													:	null}
 												</div>
-												<p className="mt-1 truncate font-mono text-[11px] text-zinc-200">
+												<p className="mt-1 truncate text-[11px] font-semibold text-zinc-100">
+													{item.label}
+													<span className="ml-1.5 font-normal text-zinc-400">
+														{item.owner} · {item.entryKind}
+														{item.identified ? "" : " · unidentified"}
+													</span>
+												</p>
+												<p className="truncate font-mono text-[11px] text-zinc-200">
 													{item.path}
 												</p>
 												<p className="text-[11px] text-zinc-400">
 													{item.recommendation}
+												</p>
+												<p className="text-[11px] text-amber-200/70">
+													<span className="text-zinc-400">If removed:</span>{" "}
+													{item.impactIfRemoved}
 												</p>
 												{result ?
 													<p className="mt-0.5 text-[11px] text-zinc-300">
@@ -587,8 +799,31 @@ export function StorageCleanupOverlay({
 									<li className="flex items-start gap-1.5">
 										<ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" />
 										<span>
-											Per-item size is measured with <code>du -sk</code>; items
-											below 5 MB are skipped from Downloads/Trash.
+											Every dot-file and dot-folder in your home root is listed
+											— at any size — plus hidden folders under ~/Library and
+											hidden build caches inside projects.
+										</span>
+									</li>
+									<li className="flex items-start gap-1.5">
+										<ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" />
+										<span>
+											Each entry is matched against a catalogue of known tools
+											to show its owner and what breaks if it is missing.
+											Unmatched hidden files stay marked <em>unidentified</em>.
+										</span>
+									</li>
+									<li className="flex items-start gap-1.5">
+										<ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" />
+										<span>
+											The safe score combines risk level, whether the tool
+											rebuilds the data, and how recently it was modified.
+										</span>
+									</li>
+									<li className="flex items-start gap-1.5">
+										<ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" />
+										<span>
+											Per-item size is measured with <code>du -sk</code>; nested
+											paths are never counted twice in the total.
 										</span>
 									</li>
 									<li className="flex items-start gap-1.5">
@@ -597,14 +832,15 @@ export function StorageCleanupOverlay({
 											Cleaned items are moved to Finder&apos;s Trash so they can
 											be recovered.
 										</span>
-									</li>{" "}
+									</li>
 									<li className="flex items-start gap-1.5">
 										<ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" />
 										<span>
-											Anything inside a Cline or .cline directory is treated as
-											high risk and cannot be selected for automatic cleanup.
+											Credential and configuration paths (.ssh, .gnupg, .aws,
+											.kube, .config, .local, shell rc files) and Cline
+											directories are protected — visible, but never selectable.
 										</span>
-									</li>{" "}
+									</li>
 								</ol>
 							</details>
 
@@ -639,6 +875,8 @@ export function StorageCleanupOverlay({
 									setAcknowledged(false);
 									setCleanupProgress(null);
 									setLiveStatusById(new Map());
+									setScanProgress(null);
+									setRecentFinds([]);
 									onRescan();
 								}}
 								disabled={isExecuting || isScanning}>
