@@ -8,6 +8,46 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [v0.2.0-alpha.2] - 2026-08-11
+
+### 🚀 Highlights & Features
+
+- **Over-the-air Updates**: Xclense updates itself. It checks shortly after launch and
+  every six hours, downloads the new build, installs it, and relaunches. Update
+  payloads are verified against an Ed25519 signature before install, so a tampered or
+  unsigned payload is rejected.
+- **Interruption-Safe Restarts**: A shared busy registry (`lib/app-busy.ts`) tracks
+  work that must not be killed. If a storage scan or cleanup is in flight when an
+  update is staged, the relaunch waits for it to finish rather than cutting a
+  Trash operation in half.
+- **Update Progress UI**: A corner panel reports download progress with byte counts,
+  then install and restart state. Failed checks are silent by design — testers are
+  regularly offline, and that is not an error worth surfacing.
+- **In-App Version Display**: The sidebar shows the running version and derives its
+  channel label from the version string, so neither can drift from `Cargo.toml`.
+
+### 🔧 Build & Release Infrastructure
+
+- Release builds emit and sign the `.app.tar.gz` updater payload; `release.yml` fails
+  the run if the `.sig` is absent instead of publishing a release that existing
+  installs would silently reject.
+- Update manifest published to `updates/latest.json` on `main` and served via
+  `raw.githubusercontent.com`. GitHub's "latest release" URL excludes pre-releases, so
+  no alpha build could ever be discovered through it.
+- Repository made public. Release assets in a private repo return `404` to
+  unauthenticated clients, which made OTA impossible.
+- GitHub Actions moved off the deprecated Node 20 runtime (checkout v7, setup-node v7,
+  cache v6).
+- CI now builds the frontend before the Rust checks — `tauri-build` resolves
+  `frontendDist` at compile time and failed on a clean checkout without it.
+
+### 🐛 Fixed Bugs & Issues
+
+- Resolved four clippy lints (`unnecessary_sort_by` ×3, `collapsible_str_replace`) so
+  the warning count sits at zero.
+
+---
+
 ## [v0.2.0-alpha.1] - 2026-08-11
 
 First published build of Xclense and the opening of the **Alpha channel**.
