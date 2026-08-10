@@ -125,7 +125,12 @@ static tree into `out/` — this depends on `output: "export"` in `next.config.t
 `"frontendDist": "../out"` in `tauri.conf.json`. Do not change either without
 re-verifying the bundle.
 
+The signing key **must** be present or the OTA updater artifacts are unsigned and
+every installed client rejects the update:
+
 ```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/xclense-updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 yarn tauri build
 ```
 
@@ -133,8 +138,13 @@ Artifacts land in:
 
 ```
 src-tauri/target/release/bundle/macos/Xclense.app
+src-tauri/target/release/bundle/macos/Xclense.app.tar.gz       # OTA payload
+src-tauri/target/release/bundle/macos/Xclense.app.tar.gz.sig   # OTA signature
 src-tauri/target/release/bundle/dmg/Xclense_<version>_aarch64.dmg
 ```
+
+If the `.tar.gz.sig` is missing, the signing key was not set — fix it and rebuild
+rather than publishing, or existing installs will silently stop updating.
 
 > The build is **unsigned and un-notarized**. Gatekeeper will warn testers on first
 > launch; the install instructions in `RELEASE_NOTES.md` must tell them to use
@@ -214,11 +224,56 @@ gh release create vX.Y.Z-alpha.N \
 > with `gh run cancel <id>`, or skip step 7 entirely and let the workflow do the
 > publishing.
 
-### 8. Verify
+### 8. Publish the OTA update manifest
+
+Installed copies poll a static manifest, **not** the GitHub "latest release" URL —
+that URL skips pre-releases, and every alpha/beta build is one. The manifest lives at
+`updates/latest.json` on `main` and is served through
+`raw.githubusercontent.com`, which is the endpoint compiled into the app.
+
+`release.yml` writes and commits it automatically on a tag push. Doing it by hand:
+
+```bash
+TAG=vX.Y.Z
+VERSION=${TAG#v}
+SIGNATURE=$(cat src-tauri/target/release/bundle/macos/Xclense.app.tar.gz.sig)
+
+mkdir -p updates
+cat > updates/latest.json <<JSON
+{
+  "version": "$VERSION",
+  "notes": "See https://github.com/sudsarkar13/xclense/releases/tag/$TAG",
+  "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "$SIGNATURE",
+      "url": "https://github.com/sudsarkar13/xclense/releases/download/$TAG/Xclense.app.tar.gz"
+    }
+  }
+}
+JSON
+
+git add updates/latest.json
+git commit -m "chore(updates): publish $TAG update manifest [skip ci]"
+git push origin main
+```
+
+Upload `Xclense.app.tar.gz` and `Xclense.app.tar.gz.sig` alongside the `.dmg` — the
+manifest URL points at that release asset, so a missing tarball breaks OTA for
+everyone even though the release page looks fine.
+
+### 9. Verify
 
 ```bash
 gh release view vX.Y.Z --repo sudsarkar13/xclense
 gh release list --repo sudsarkar13/xclense --limit 5
+
+# The manifest an installed client will actually fetch:
+curl -s https://raw.githubusercontent.com/sudsarkar13/xclense/main/updates/latest.json
+
+# The payload must be reachable unauthenticated:
+curl -s -o /dev/null -w "%{http_code}\n" -L \
+  "https://github.com/sudsarkar13/xclense/releases/download/vX.Y.Z/Xclense.app.tar.gz"
 ```
 
 Confirm the pre-release flag is correct: alpha and beta releases must NOT be marked

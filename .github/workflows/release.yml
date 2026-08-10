@@ -78,6 +78,11 @@ jobs:
         run: yarn install --immutable
 
       - name: Build Tauri bundle
+        env:
+          # Signs the updater artifacts. Without these the .app.tar.gz.sig is
+          # not produced and installed clients reject the update.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: yarn tauri build
 
       - name: Verify the bundle carries the app icon
@@ -88,12 +93,19 @@ jobs:
           plutil -p "$APP/Contents/Info.plist" | grep -q CFBundleIconFile \
             || { echo "::error::Info.plist has no CFBundleIconFile"; exit 1; }
 
-      - name: Locate the DMG
+      - name: Locate the DMG and updater artifacts
         id: dmg
         run: |
           DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+          TARBALL=$(ls src-tauri/target/release/bundle/macos/*.app.tar.gz | head -1)
+          SIGFILE=$(ls src-tauri/target/release/bundle/macos/*.app.tar.gz.sig | head -1)
+          test -n "$TARBALL" && test -n "$SIGFILE" \
+            || { echo "::error::Updater artifacts missing — is createUpdaterArtifacts enabled and the signing key set?"; exit 1; }
           echo "path=$DMG" >> "$GITHUB_OUTPUT"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "sigfile=$SIGFILE" >> "$GITHUB_OUTPUT"
           echo "Built: $DMG"
+          echo "Updater: $TARBALL"
 
       - name: Publish GitHub Release
         env:
@@ -109,13 +121,55 @@ jobs:
           # The maintainer may already have published this release by hand from
           # a local build (see .claude/skills/release-manager/SKILL.md). Attach
           # to the existing release rather than failing the run.
+          TARBALL="${{ steps.dmg.outputs.tarball }}"
+          SIGFILE="${{ steps.dmg.outputs.sigfile }}"
+
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — uploading bundle to it."
-            gh release upload "$TAG" "$DMG" --clobber --repo "${{ github.repository }}"
+            echo "Release $TAG already exists — uploading bundles to it."
+            gh release upload "$TAG" "$DMG" "$TARBALL" "$SIGFILE" --clobber --repo "${{ github.repository }}"
           else
-            gh release create "$TAG" "$DMG" \
+            gh release create "$TAG" "$DMG" "$TARBALL" "$SIGFILE" \
               --title "$TAG — ${{ steps.meta.outputs.channel }} Release" \
               --notes-file RELEASE_NOTES.md \
               $PRERELEASE_FLAG \
               --repo "${{ github.repository }}"
+          fi
+
+      # The OTA endpoint is a static file on main rather than the release
+      # "latest" URL, because GitHub excludes pre-releases from that URL and
+      # every alpha/beta build is a pre-release.
+      - name: Publish update manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          SIGNATURE=$(cat "${{ steps.dmg.outputs.sigfile }}")
+          TARBALL_NAME=$(basename "${{ steps.dmg.outputs.tarball }}")
+          REPO_URL="https://github.com/${{ github.repository }}"
+
+          mkdir -p updates
+          cat > updates/latest.json <<JSON
+          {
+            "version": "$VERSION",
+            "notes": "See $REPO_URL/releases/tag/$TAG",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "$SIGNATURE",
+                "url": "$REPO_URL/releases/download/$TAG/$TARBALL_NAME"
+              }
+            }
+          }
+          JSON
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout main
+          git add updates/latest.json
+          if git diff --staged --quiet; then
+            echo "Manifest unchanged."
+          else
+            git commit -m "chore(updates): publish $TAG update manifest [skip ci]"
+            git push origin main
           fi

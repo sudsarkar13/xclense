@@ -24,7 +24,7 @@ changes may land in a `MINOR` bump.
 
 ### Pre-release suffixes
 
-```
+```text
 0.2.0-alpha.1   ➔   0.2.0-alpha.2   ➔   0.2.0-beta.1   ➔   0.2.0
 └──────────────── same target version ────────────────────┘
 ```
@@ -119,9 +119,13 @@ same string, so a tester can always read their exact build off the screen.
 
 ### Distributing builds
 
-The repository is private, so GitHub Releases are visible only to collaborators. To
-bring in an outside tester, either add them as a repository collaborator, or send them
-the `.dmg` directly from the release page.
+The repository is **public**, so anyone with the release URL can download a build —
+no collaborator invite needed. Point a tester at the releases page and they install
+the `.dmg` once; every build after that arrives over the air.
+
+The repository was made public specifically to serve OTA updates: release assets in a
+private repo return `404` to unauthenticated clients, so an installed app could never
+fetch its own update.
 
 ### What testers need to know
 
@@ -139,7 +143,7 @@ Unsigned builds are acceptable for a small invited alpha. Before a public beta, 
 Apple Developer signing so testers stop seeing Gatekeeper warnings. Tauri reads these
 from the environment (add them as repository secrets for the release workflow):
 
-```
+```text
 APPLE_CERTIFICATE
 APPLE_CERTIFICATE_PASSWORD
 APPLE_SIGNING_IDENTITY
@@ -162,7 +166,75 @@ installed.
 
 ---
 
-## 5. Release checklist
+## 5. Over-the-air (OTA) updates
+
+Installed copies of Xclense update themselves. The user never downloads a DMG twice.
+
+### How it works
+
+```text
+app launches
+   ↓ (5s delay, then every 6 hours)
+GET raw.githubusercontent.com/sudsarkar13/xclense/main/updates/latest.json
+   ↓ manifest version > running version?
+download github.com/.../releases/download/<tag>/Xclense.app.tar.gz
+   ↓ verify Ed25519 signature against the public key compiled into the app
+install (replaces the .app bundle)
+   ↓ app idle?
+relaunch   ──  busy?  ──▶ wait for the scan/cleanup to finish, then relaunch
+```
+
+### Why a static manifest and not the release URL
+
+The obvious endpoint is
+`https://github.com/<owner>/<repo>/releases/latest/download/latest.json`. It does not
+work here: GitHub's `/releases/latest` **excludes pre-releases**, and every alpha and
+beta build is published as one. An alpha tester would never be offered an alpha
+update.
+
+So the manifest is a committed file, `updates/latest.json`, served through
+`raw.githubusercontent.com`. `release.yml` regenerates and commits it on every tag
+push. That URL caches for around five minutes, which is the practical floor on how
+fast an update reaches clients.
+
+### Signing
+
+Updates are signed with an Ed25519 (minisign) keypair. The **public** key is compiled
+into the app via `plugins.updater.pubkey` in `tauri.conf.json`; the **private** key
+signs the tarball at build time.
+
+- Private key: `~/.tauri/xclense-updater.key`, mode `600`, never in the repo
+- CI: stored as the `TAURI_SIGNING_PRIVATE_KEY` repository secret
+- Password: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (currently empty)
+
+> **Losing the private key is unrecoverable.** Every installed copy only trusts
+> signatures from this exact key. If it is lost, no future build can update any
+> existing install — every user has to reinstall from a DMG by hand. Back it up
+> somewhere durable (password manager, not just this Mac).
+
+An unsigned build is worse than a failed build: the release page looks correct, but
+clients silently reject the update. `release.yml` fails the run if the `.sig` file is
+missing, which is the guard against shipping one.
+
+### What the user sees
+
+Nothing, until there is something to see. A corner panel appears during download with
+a progress bar, switches to "Installing", and the app relaunches itself. If a storage
+scan or cleanup is running, the panel says the restart is waiting and the relaunch
+happens the moment that work finishes — a cleanup moving files to Trash is never cut
+off midway.
+
+A failed check is silent by design. Testers are frequently offline or behind captive
+portals, and a background check that cannot reach GitHub is not an error worth
+interrupting anyone about.
+
+### Architecture coverage caveat
+
+The manifest declares only `darwin-aarch64`. An Intel Mac running Xclense finds no
+matching platform entry and simply never updates — silently. Adding
+`darwin-x86_64` (or a universal build) is a prerequisite for supporting Intel testers.
+
+## 6. Release checklist
 
 - [ ] Target version and channel decided
 - [ ] Version bumped in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`
