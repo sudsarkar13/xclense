@@ -199,6 +199,14 @@ gh release create vX.Y.Z-alpha.N \
 > `ls src-tauri/target/release/bundle/dmg/` rather than assuming the exact string.
 > Bundle artifacts are gitignored via `/src-tauri/target` and must NOT be committed.
 
+> **Two publishing paths, pick one.** Pushing the tag also triggers
+> `.github/workflows/release.yml`, which builds its own bundle and publishes. If you
+> publish by hand from a local build (step 7), that workflow run is redundant —
+> it detects the existing release and uploads its bundle to it with `--clobber`
+> rather than failing, but it still burns macOS runner minutes. Either cancel the run
+> with `gh run cancel <id>`, or skip step 7 entirely and let the workflow do the
+> publishing.
+
 ### 8. Verify
 
 ```bash
