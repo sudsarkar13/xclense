@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -10,6 +11,8 @@ import {
 	MemoryStick,
 	Settings,
 } from "lucide-react";
+
+import { pingBackend } from "@/lib/tauri-client";
 
 interface NavItem {
 	label: string;
@@ -26,11 +29,27 @@ const NAV_ITEMS: NavItem[] = [
 	{ label: "Settings", icon: Settings },
 ];
 
+/** Derived from the version string itself so the channel can never drift. */
+const releaseChannel = (version: string): string => {
+	if (version.includes("-alpha.")) return "Alpha channel";
+	if (version.includes("-beta.")) return "Beta channel";
+	return "Stable channel";
+};
+
 export function DashboardNav(): React.JSX.Element {
 	const pathname = usePathname();
+	const [version, setVersion] = useState<string | null>(null);
+
+	// The backend reports env!("CARGO_PKG_VERSION"), so the displayed version
+	// always tracks src-tauri/Cargo.toml with nothing hardcoded in the UI.
+	useEffect(() => {
+		void pingBackend()
+			.then((response) => setVersion(response?.version ?? null))
+			.catch(() => setVersion(null));
+	}, []);
 
 	return (
-		<aside className="col-span-12 border-r border-white/10 bg-black/20 p-3 md:col-span-3 lg:col-span-2">
+		<aside className="col-span-12 flex flex-col border-r border-white/10 bg-black/20 p-3 md:col-span-3 lg:col-span-2">
 			<div className="space-y-2.5">
 				{NAV_ITEMS.map((item) => {
 					const Icon = item.icon;
@@ -58,6 +77,13 @@ export function DashboardNav(): React.JSX.Element {
 					);
 				})}
 			</div>
+
+			{version ?
+				<div className="mt-auto px-3 pt-3 text-[10px] leading-tight text-zinc-500">
+					<p className="font-mono text-zinc-400">v{version}</p>
+					<p>{releaseChannel(version)}</p>
+				</div>
+			:	null}
 		</aside>
 	);
 }
