@@ -343,7 +343,7 @@ export function StorageCleanupOverlay({
 			<Dialog open={open} onOpenChange={handleClose}>
 				<DialogContent
 					showCloseButton
-					className="!max-w-none w-[1000px] max-w-[92vw] max-h-[80vh] overflow-y-auto border-white/15 bg-zinc-900/95 text-zinc-100 shadow-2xl shadow-cyan-950/20 duration-200 ease-out data-[state=open]:!translate-x-[calc(-50%+8.3333vw)] data-[state=closed]:!translate-x-[calc(-50%+8.3333vw)] data-[state=open]:slide-in-from-bottom-2 data-[state=closed]:slide-out-to-bottom-2">
+					className="!max-w-none w-[1000px] max-w-[92vw] max-h-[80vh] overflow-y-auto border-white/15 bg-zinc-900/95 text-zinc-100 shadow-2xl shadow-cyan-950/20 duration-350 ease-[cubic-bezier(0.16,1,0.3,1)] data-[state=open]:!translate-x-[calc(-50%+8.3333vw)] data-[state=closed]:!translate-x-[calc(-50%+8.3333vw)] data-[state=open]:slide-in-from-bottom-2 data-[state=closed]:slide-out-to-bottom-2">
 					<DialogHeader className="space-y-1.5">
 						<div className="flex items-center gap-2">
 							<Sparkles className="h-4 w-4 text-cyan-300" />
