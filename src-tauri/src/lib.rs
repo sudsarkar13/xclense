@@ -547,7 +547,7 @@ mod commands {
       }
     }
 
-    metas.sort_by(|a, b| b.created_at_epoch_ms.cmp(&a.created_at_epoch_ms));
+    metas.sort_by_key(|meta| std::cmp::Reverse(meta.created_at_epoch_ms));
 
     for stale_meta in metas.iter().skip(MAX_SNAPSHOT_COUNT) {
       let stale_path = directory.join(format!("{}.json", stale_meta.snapshot_id));
@@ -626,7 +626,7 @@ mod commands {
     let mut records: Vec<ActionAuditRecord> = serde_json::from_str(&content)
       .map_err(|error| format!("failed to parse audit file '{}': {}", path.display(), error))?;
 
-    records.sort_by(|a, b| b.requested_at_epoch_ms.cmp(&a.requested_at_epoch_ms));
+    records.sort_by_key(|record| std::cmp::Reverse(record.requested_at_epoch_ms));
 
     Ok(records.into_iter().take(limit).collect())
   }
@@ -859,8 +859,7 @@ mod commands {
           .split(':')
           .nth(1)
           .unwrap_or("0")
-          .replace('.', "")
-          .replace(',', "");
+          .replace(['.', ','], "");
         free_pages = parse_u64(&value)?;
       }
     }
@@ -2996,7 +2995,7 @@ mod commands {
 
     let mut items = std::mem::take(&mut ctx.items);
     // Sort largest first.
-    items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    items.sort_by_key(|item| std::cmp::Reverse(item.size_bytes));
     let total_recoverable_bytes: u64 = items
       .iter()
       .filter(|item| !item.protected && item.risk_level != "high")
