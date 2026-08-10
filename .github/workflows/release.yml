@@ -1,0 +1,111 @@
+name: Xclense Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v0.2.0-alpha.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  macos-bundle:
+    name: Build macOS bundle and publish release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Alpha and beta tags publish as pre-releases so they never take the
+          # "Latest" slot from a shipped stable build.
+          case "$TAG" in
+            *-alpha.*) echo "channel=Alpha"  >> "$GITHUB_OUTPUT"; echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *-beta.*)  echo "channel=Beta"   >> "$GITHUB_OUTPUT"; echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)         echo "channel=Stable" >> "$GITHUB_OUTPUT"; echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Verify tag matches the version in every manifest
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PKG=$(node -p "require('./package.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
+          if [ "$VERSION" != "$PKG" ] || [ "$VERSION" != "$TAURI" ] || [ "$VERSION" != "$CARGO" ]; then
+            echo "::error::Tag $VERSION does not match manifests (package.json=$PKG tauri=$TAURI cargo=$CARGO)"
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable Corepack (Yarn 4)
+        run: corepack enable
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Build Tauri bundle
+        run: yarn tauri build
+
+      - name: Verify the bundle carries the app icon
+        run: |
+          APP="src-tauri/target/release/bundle/macos/Xclense.app"
+          test -f "$APP/Contents/Resources/icon.icns" \
+            || { echo "::error::Bundle is missing Resources/icon.icns — check bundle.icon in tauri.conf.json"; exit 1; }
+          plutil -p "$APP/Contents/Info.plist" | grep -q CFBundleIconFile \
+            || { echo "::error::Info.plist has no CFBundleIconFile"; exit 1; }
+
+      - name: Locate the DMG
+        id: dmg
+        run: |
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
+          echo "Built: $DMG"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            "${{ steps.dmg.outputs.path }}" \
+            --title "${{ steps.meta.outputs.tag }} — ${{ steps.meta.outputs.channel }} Release" \
+            --notes-file RELEASE_NOTES.md \
+            $PRERELEASE_FLAG \
+            --repo "${{ github.repository }}"

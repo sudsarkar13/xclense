@@ -1,0 +1,95 @@
+name: Xclense CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend — typecheck, lint, static export
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable Corepack (Yarn 4)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: TypeScript typecheck
+        run: yarn tsc --noEmit
+
+      - name: ESLint
+        run: yarn eslint .
+
+      - name: Static export build
+        run: yarn build
+
+      - name: Verify static export output
+        run: test -f out/index.html
+
+  backend:
+    name: Backend — cargo check and clippy
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check --locked
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --locked
+
+  version-consistency:
+    name: Version consistency across manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assert package.json, tauri.conf.json and Cargo.toml agree
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "package.json     : $PKG"
+          echo "tauri.conf.json  : $TAURI"
+          echo "Cargo.toml       : $CARGO"
+          if [ "$PKG" != "$TAURI" ] || [ "$PKG" != "$CARGO" ]; then
+            echo "::error::Version mismatch across manifests. See .claude/skills/release-manager/SKILL.md"
+            exit 1
+          fi
