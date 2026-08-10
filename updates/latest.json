@@ -1,11 +1,15 @@
 {
-  "version": "0.2.0-alpha.2",
-  "notes": "See https://github.com/sudsarkar13/xclense/releases/tag/v0.2.0-alpha.2",
-  "pub_date": "2026-08-10T21:12:19Z",
+  "version": "0.2.0-alpha.3",
+  "notes": "See https://github.com/sudsarkar13/xclense/releases/tag/v0.2.0-alpha.3",
+  "pub_date": "2026-08-10T21:31:55Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd2ZSMmdqNVJiTWdPdGxWUXRNVXpNay9EcFBTWUZwUHplSkxXZWZvLzYvbHF1My9BYnB3L3Bmcmcvc3REOWpHVTh0N0c1b0dJSG9uUThzSVFhcnpCZXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Mzk2MDUyCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CklpRmozU3NVMWhQQUVKd09OVlkydlVRbU4wL1A0citvS3pjdzU1Z3NJUmlSeEFQZE54RUFsK0NyU09hNmk4NDFWMmdyR0FjVGJNcUZUbUsvUXRuNkJBPT0K",
-      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.2/Xclense.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd2ZIaVJjUWV5bURJV0o4L1FZbWVPVHd0dFhBUVRTR0NCNXI3VytONllmZVNQWUJsQ3d4MW1TUFpGd1NLYWNvR2R4K0pxTkE3RElpNWovVkpMM1JzT0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Mzk3MzgzCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CkdNeXYyYk96UWpQQThETEYrY2hwVmp1Z1hWZHIwZlhuNjJoL0NVZHFLbE93bFV1bmU2RWI3UmV3UVd4QThZaHZRYmRRaE5ObVN4bWMrd29HZFhqQ0J3PT0K",
+      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.3/Xclense.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd2ZIaVJjUWV5bURJV0o4L1FZbWVPVHd0dFhBUVRTR0NCNXI3VytONllmZVNQWUJsQ3d4MW1TUFpGd1NLYWNvR2R4K0pxTkE3RElpNWovVkpMM1JzT0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Mzk3MzgzCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CkdNeXYyYk96UWpQQThETEYrY2hwVmp1Z1hWZHIwZlhuNjJoL0NVZHFLbE93bFV1bmU2RWI3UmV3UVd4QThZaHZRYmRRaE5ObVN4bWMrd29HZFhqQ0J3PT0K",
+      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.3/Xclense.app.tar.gz"
     }
   }
 }
