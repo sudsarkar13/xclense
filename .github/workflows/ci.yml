@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    name: Frontend — typecheck, lint, static export
+  desktop:
+    name: Desktop — frontend and backend checks
     runs-on: macos-latest
 
     steps:
@@ -26,29 +26,6 @@ jobs:
 
       - name: Enable Corepack (Yarn 4)
         run: corepack enable
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      - name: TypeScript typecheck
-        run: yarn tsc --noEmit
-
-      - name: ESLint
-        run: yarn eslint .
-
-      - name: Static export build
-        run: yarn build
-
-      - name: Verify static export output
-        run: test -f out/index.html
-
-  backend:
-    name: Backend — cargo check and clippy
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -64,6 +41,24 @@ jobs:
             src-tauri/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: TypeScript typecheck
+        run: yarn tsc --noEmit
+
+      - name: ESLint
+        run: yarn eslint .
+
+      # This must run before any cargo step: tauri-build resolves `frontendDist`
+      # at compile time and panics when ../out is missing, so the Rust checks
+      # cannot run against a repo that has not had its frontend exported.
+      - name: Static export build
+        run: yarn build
+
+      - name: Verify static export output
+        run: test -f out/index.html
 
       - name: Cargo check
         working-directory: src-tauri

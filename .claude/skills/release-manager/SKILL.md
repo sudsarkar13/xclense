@@ -99,8 +99,15 @@ cd src-tauri && cargo check && cd ..
 ```bash
 yarn tsc --noEmit                      # TypeScript
 yarn eslint .                          # Lint
+yarn build                             # Static export — REQUIRED before any cargo step
 cd src-tauri && cargo clippy && cd ..  # Rust lints
 ```
+
+> `yarn build` must come before `cargo check`/`cargo clippy`. `tauri-build` resolves
+> `frontendDist` at compile time and panics with
+> `The 'frontendDist' configuration is set to "../out" but this path doesn't exist`
+> when the frontend has not been exported yet. This bites on a clean checkout and in
+> CI, not locally where `out/` usually already exists.
 
 If formatting is needed, this repo has **no prettier config file** — the style comes
 from the maintainer's editor. Match it explicitly or the diff explodes:
