@@ -37,8 +37,29 @@
 - Without Full Disk Access a scan finds ~72 items instead of ~77; the difference is app
   container caches and app support data, which are the largest single wins on most
   machines. Granting access is worth it.
-- The build remains **unsigned and un-notarized**; Gatekeeper warns on first launch.
 - Cleanup always routes through Finder's Trash — Xclense never deletes permanently.
+
+### 🔓 First launch on macOS 15 Sequoia and macOS 26 Tahoe
+
+This build is **unsigned and un-notarized**, so macOS blocks the first launch with:
+
+> **"Xclense" Not Opened** — Apple could not verify "Xclense" is free of malware…
+> **[ Done ] [ Move to Bin ]**
+
+The app is fine; it just has no Apple Developer ID yet. **Right-click ➔ Open no longer
+works** — Apple removed that bypass in Sequoia. Do one of these instead:
+
+1. Click **Done**, then open **System Settings ➔ Privacy & Security**, scroll to
+   Security, and click **Open Anyway** next to the Xclense message. Authenticate, launch
+   again, confirm. (The message expires about an hour after the blocked launch.)
+2. Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/Xclense.app`
+
+This only affects DMG installs. **In-app OTA updates are never blocked**, because the
+updater downloads them directly rather than through a browser.
+
+Signing and notarization are already wired into the release pipeline and switch on as
+soon as an Apple Developer ID certificate is available. See
+[docs/macos-code-signing.md](docs/macos-code-signing.md).
 
 Report issues at <https://github.com/sudsarkar13/xclense/issues> with the version
 shown in the sidebar.

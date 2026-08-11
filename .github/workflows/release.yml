@@ -78,13 +78,74 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      # Apple's notarization API takes a key file, not an env var. Written to
+      # the runner's temp dir (wiped with the runner) rather than the workspace,
+      # so it can never be picked up by the bundler or committed.
+      - name: Stage the App Store Connect API key
+        id: apple
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          if [ -n "$APPLE_API_KEY_CONTENT" ]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s' "$APPLE_API_KEY_CONTENT" > "$KEY_PATH"
+            chmod 600 "$KEY_PATH"
+            echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
+          fi
+          # Distinguishes a signed release build from the unsigned fallback.
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::APPLE_CERTIFICATE is not set — publishing an ad-hoc signed build. macOS 15+ blocks these behind System Settings ➔ Privacy & Security ➔ Open Anyway. See docs/macos-code-signing.md."
+          fi
+
       - name: Build Tauri bundle
         env:
           # Signs the updater artifacts. Without these the .app.tar.gz.sig is
           # not produced and installed clients reject the update.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Gatekeeper signing. All of these are optional: with none of them set
+          # the bundler falls back to an ad-hoc signature and the build still
+          # succeeds, which is what keeps the alpha pipeline running before the
+          # Apple Developer Program membership exists.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarization via the App Store Connect API. Tauri notarizes and
+          # staples automatically once these are present.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ steps.apple.outputs.key_path }}
         run: yarn tauri build --target universal-apple-darwin
+
+      # Signing failures are silent in the worst way: the bundle still builds,
+      # the release still publishes, and only the tester finds out. Assert the
+      # signature actually matches what the secrets promised.
+      - name: Verify code signature and notarization
+        run: |
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/codesign.txt
+
+          if [ "${{ steps.apple.outputs.signed }}" != "true" ]; then
+            echo "::notice::Ad-hoc signed build (no Developer ID secrets configured)."
+            exit 0
+          fi
+
+          grep -q "TeamIdentifier=not set" /tmp/codesign.txt \
+            && { echo "::error::APPLE_CERTIFICATE was set but the bundle is still ad-hoc signed — the certificate did not import."; exit 1; }
+          grep -q "flags=.*runtime" /tmp/codesign.txt \
+            || { echo "::error::Hardened runtime is not enabled — notarization will reject this bundle."; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$APP" \
+            || { echo "::error::Code signature does not verify."; exit 1; }
+
+          # Gatekeeper's own verdict. This is the check that corresponds to what
+          # a tester sees on first launch.
+          spctl -a -vvv -t exec "$APP" 2>&1 | tee /tmp/spctl.txt
+          grep -q "accepted" /tmp/spctl.txt \
+            || { echo "::error::Gatekeeper rejects this bundle — notarization did not complete."; exit 1; }
+          echo "::notice::Signed, hardened, and accepted by Gatekeeper."
 
       - name: Verify the bundle carries the app icon
         run: |
@@ -131,16 +192,52 @@ jobs:
           TARBALL="${{ steps.dmg.outputs.tarball }}"
           SIGFILE="${{ steps.dmg.outputs.sigfile }}"
 
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — uploading bundles to it."
-            gh release upload "$TAG" "$DMG" "$TARBALL" "$SIGFILE" --clobber --repo "${{ github.repository }}"
+          REPO="${{ github.repository }}"
+
+          # A `gh release create` that dies mid-flight (GitHub 503s during asset
+          # upload are not rare) leaves the release behind as a DRAFT with some
+          # or all assets attached. Retrying `create` then fails with "already
+          # exists", and a draft is invisible to the updater. Treat "exists in
+          # any state" as the resumable case and always converge on published.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — resuming."
+            gh release upload "$TAG" "$DMG" "$TARBALL" "$SIGFILE" --clobber --repo "$REPO"
           else
-            gh release create "$TAG" "$DMG" "$TARBALL" "$SIGFILE" \
-              --title "$TAG — ${{ steps.meta.outputs.channel }} Release" \
-              --notes-file RELEASE_NOTES.md \
-              $PRERELEASE_FLAG \
-              --repo "${{ github.repository }}"
+            for attempt in 1 2 3; do
+              gh release create "$TAG" "$DMG" "$TARBALL" "$SIGFILE" \
+                --title "$TAG — ${{ steps.meta.outputs.channel }} Release" \
+                --notes-file RELEASE_NOTES.md \
+                $PRERELEASE_FLAG \
+                --repo "$REPO" && break
+              echo "::warning::Attempt $attempt to publish $TAG failed."
+              if [ "$attempt" = 3 ]; then
+                echo "::error::Could not publish $TAG after 3 attempts."
+                exit 1
+              fi
+              # A failed create may still have created the release; from here on
+              # the resume path is the correct one.
+              sleep $((attempt * 15))
+              if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+                gh release upload "$TAG" "$DMG" "$TARBALL" "$SIGFILE" --clobber --repo "$REPO"
+                break
+              fi
+            done
           fi
+
+          # Converge on the intended final state regardless of how we got here.
+          gh release edit "$TAG" --repo "$REPO" \
+            --draft=false --prerelease=${{ steps.meta.outputs.prerelease }}
+
+          # Assert it, rather than trusting that the edit took.
+          STATE=$(gh release view "$TAG" --repo "$REPO" --json isDraft,isPrerelease,assets)
+          echo "$STATE"
+          [ "$(echo "$STATE" | jq -r .isDraft)" = "false" ] \
+            || { echo "::error::$TAG is still a draft — the updater cannot see it."; exit 1; }
+          [ "$(echo "$STATE" | jq -r .isPrerelease)" = "${{ steps.meta.outputs.prerelease }}" ] \
+            || { echo "::error::$TAG has the wrong prerelease flag."; exit 1; }
+          COUNT=$(echo "$STATE" | jq '[.assets[].name] | length')
+          [ "$COUNT" -ge 3 ] \
+            || { echo "::error::$TAG has $COUNT assets, expected the dmg, tarball and sig."; exit 1; }
 
       # The OTA endpoint is a static file on main rather than the release
       # "latest" URL, because GitHub excludes pre-releases from that URL and
@@ -154,6 +251,24 @@ jobs:
           SIGNATURE=$(cat "${{ steps.dmg.outputs.sigfile }}")
           TARBALL_NAME=$(basename "${{ steps.dmg.outputs.tarball }}")
           REPO_URL="https://github.com/${{ github.repository }}"
+          PAYLOAD_URL="$REPO_URL/releases/download/$TAG/$TARBALL_NAME"
+
+          # Publishing a manifest that points at an unreachable payload breaks
+          # every installed client at once, and nothing about the release page
+          # would look wrong. Prove the URL resolves for an anonymous client
+          # (no token) before the manifest starts advertising it.
+          echo "Probing $PAYLOAD_URL as an unauthenticated client..."
+          for attempt in 1 2 3 4 5; do
+            CODE=$(curl -sSL -o /dev/null -w '%{http_code}' --max-time 60 "$PAYLOAD_URL" || echo 000)
+            [ "$CODE" = "200" ] && break
+            echo "  attempt $attempt: HTTP $CODE"
+            [ "$attempt" = 5 ] && {
+              echo "::error::Update payload is not publicly downloadable (HTTP $CODE). A private repo or a missing asset makes OTA impossible."
+              exit 1
+            }
+            sleep 15
+          done
+          echo "Payload is publicly reachable."
 
           mkdir -p updates
           cat > updates/latest.json <<JSON
@@ -184,3 +299,28 @@ jobs:
             git commit -m "chore(updates): publish $TAG update manifest [skip ci]"
             git push origin main
           fi
+
+      # raw.githubusercontent is CDN-cached for roughly five minutes, so a run
+      # can finish green while every client still receives the previous
+      # manifest. Waiting here means "release succeeded" and "clients can see
+      # it" mean the same thing, instead of the maintainer having to remember
+      # to re-check by hand.
+      - name: Wait for the update endpoint to serve the new version
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          ENDPOINT=$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.endpoints[0]")
+          echo "Endpoint: $ENDPOINT"
+
+          for attempt in $(seq 1 20); do
+            SERVED=$(curl -sS --max-time 30 "$ENDPOINT" | jq -r .version 2>/dev/null || echo "")
+            if [ "$SERVED" = "$VERSION" ]; then
+              echo "::notice::Update endpoint is serving $VERSION after $((attempt * 30))s."
+              exit 0
+            fi
+            echo "  attempt $attempt: endpoint still serving '${SERVED:-<unreadable>}'"
+            sleep 30
+          done
+
+          # The commit is on main either way, so this is a propagation delay
+          # rather than a broken release — say so instead of failing the run.
+          echo "::warning::Endpoint still not serving $VERSION after 10 minutes. The manifest is committed to main; this is CDN cache lag and should clear on its own."

@@ -160,12 +160,16 @@ lipo -archs "$BUNDLE/macos/Xclense.app/Contents/MacOS/Xclense"   # expect: x86_6
 test -f "$BUNDLE/macos/Xclense.app.tar.gz.sig" && echo signed
 ```
 
-> The build is **unsigned and un-notarized**. Gatekeeper will warn testers on first
-> launch; the install instructions in `RELEASE_NOTES.md` must tell them to use
-> right-click ➔ Open. To sign later, set `APPLE_CERTIFICATE`,
-> `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
-> `APPLE_PASSWORD`, and `APPLE_TEAM_ID` in the environment (or as repo secrets for
-> `.github/workflows/release.yml`).
+> The build is **unsigned and un-notarized** until an Apple Developer ID certificate
+> exists. On macOS 15+ Gatekeeper hard-blocks such a build with a **Done / Move to Bin**
+> dialog — **right-click ➔ Open no longer works**, so never write that in release
+> notes. Testers must use System Settings ➔ Privacy & Security ➔ **Open Anyway**, or
+> `xattr -dr com.apple.quarantine /Applications/Xclense.app`. Every pre-release's notes
+> MUST carry these instructions verbatim.
+>
+> Signing and notarization are already wired into `.github/workflows/release.yml` and
+> activate the moment the `APPLE_*` secrets exist; see
+> [docs/macos-code-signing.md](../../../docs/macos-code-signing.md) for the full setup.
 
 ### 4. Smoke-test the bundle
 

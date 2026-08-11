@@ -131,26 +131,40 @@ fetch its own update.
 
 Every pre-release's notes must state:
 
-1. **Install instructions** — the bundle is unsigned and un-notarized, so first launch
-   requires **right-click ➔ Open** and confirming the Gatekeeper prompt.
+1. **Install instructions** — the bundle is unsigned and un-notarized, so macOS 15+
+   blocks first launch with a **Done / Move to Bin** dialog. Right-click ➔ Open has not
+   worked since Sequoia. Testers must click **Done**, then open System Settings ➔
+   Privacy & Security ➔ **Open Anyway**, or run
+   `xattr -dr com.apple.quarantine /Applications/Xclense.app`. Full detail in
+   [docs/macos-code-signing.md](macos-code-signing.md).
 2. **Known limitations** — what is expected to be broken or slow.
 3. **How to report** — <https://github.com/sudsarkar13/xclense/issues>, including the
    version string shown in the sidebar.
 
 ### Signing and notarization
 
-Unsigned builds are acceptable for a small invited alpha. Before a public beta, set up
-Apple Developer signing so testers stop seeing Gatekeeper warnings. Tauri reads these
-from the environment (add them as repository secrets for the release workflow):
+Unsigned builds are tolerable for a small invited alpha, where every tester can be
+walked through the override. They are **not** viable for a public beta: on macOS 15+ the
+block is a dead-end dialog offering only *Done* and *Move to Bin*, which most people
+read as "this app is broken".
+
+The hardened runtime, entitlements, and the full sign ➔ notarize ➔ staple ➔ verify
+pipeline are already in place. The only missing piece is an Apple Developer Program
+membership ($99/year) and the resulting certificate. Adding these repository secrets
+activates it with no code change:
 
 ```text
-APPLE_CERTIFICATE
-APPLE_CERTIFICATE_PASSWORD
-APPLE_SIGNING_IDENTITY
-APPLE_ID
-APPLE_PASSWORD
-APPLE_TEAM_ID
+APPLE_CERTIFICATE           # base64 of the Developer ID Application .p12
+APPLE_CERTIFICATE_PASSWORD  # password used when exporting the .p12
+APPLE_SIGNING_IDENTITY      # "Developer ID Application: Name (TEAMID)"
+APPLE_API_ISSUER            # App Store Connect issuer UUID
+APPLE_API_KEY               # App Store Connect key ID
+APPLE_API_KEY_CONTENT       # contents of AuthKey_XXXX.p8
 ```
+
+Until they exist the workflow builds ad-hoc and emits a warning; once they exist it
+**fails the release** rather than publishing a bundle Gatekeeper would reject. Full
+walkthrough: [docs/macos-code-signing.md](macos-code-signing.md).
 
 ### Architecture coverage
 

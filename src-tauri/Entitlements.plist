@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Hardened Runtime entitlements. Notarization REQUIRES the hardened runtime,
+	  and the hardened runtime blocks Apple Events unless this entitlement is
+	  present. Xclense sends Apple Events to Finder in `move_to_trash` so that
+	  every deletion lands in the Trash and stays recoverable — without this
+	  entitlement a signed build would silently fail to clean anything.
+
+	  Deliberately NOT included:
+	    - com.apple.security.app-sandbox — a sandboxed app can never hold Full
+	      Disk Access, which is the whole point of the scanner.
+	    - cs.allow-jit / cs.disable-library-validation — WKWebView runs its JIT
+	      in a separate Apple-signed process, so the host binary needs neither.
+	      Entitlements that are not needed only widen the attack surface.
+	-->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

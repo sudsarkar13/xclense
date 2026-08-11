@@ -8,6 +8,52 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [Unreleased]
+
+### 🔐 Signing & Distribution
+
+- **Gatekeeper Readiness**: macOS 15+ hard-blocks unsigned apps with a dead-end
+  *Done / Move to Bin* dialog — the historic right-click ➔ Open bypass was removed in
+  Sequoia. The bundle now enables the **hardened runtime**, ships
+  `src-tauri/Entitlements.plist`, and declares usage descriptions via
+  `src-tauri/Info.plist`, so it is notarization-ready the moment a Developer ID
+  certificate exists.
+- **Apple Events Entitlement**: `com.apple.security.automation.apple-events` is granted
+  because cleanup trashes files through Finder. Under the hardened runtime a *correctly
+  signed* build without it would install, launch, scan, and then silently fail to delete
+  anything.
+- **Conditional Signing Pipeline**: `release.yml` signs, notarizes, and staples when the
+  `APPLE_*` secrets are present, and falls back to an ad-hoc build with a warning when
+  they are not — so the alpha pipeline is unaffected until the membership is purchased.
+  A post-build gate asserts the team identifier, hardened-runtime flag, signature
+  validity, and Gatekeeper's own verdict, because a failed import otherwise produces a
+  perfectly normal-looking unsigned release.
+- **Minimum System Version**: pinned to macOS 11.0, matching the arm64 slice of the
+  universal binary rather than Tauri's 10.13 default.
+
+### 🔧 Build & Release Infrastructure
+
+- **Resilient Release Publishing**: a `gh release create` interrupted by a GitHub 5xx
+  leaves a *draft* with assets attached; retrying then fails with "already exists" while
+  the draft stays invisible to the updater. Publishing now retries with backoff, resumes
+  onto an existing release in any state, and converges on published — then asserts
+  draft/pre-release flags and asset count.
+- **Update Payload Reachability Gate**: the release asset is fetched anonymously before
+  the manifest is allowed to advertise it. A manifest pointing at a private or missing
+  asset breaks every installed client at once and looks entirely normal.
+- **Endpoint Propagation Wait**: `raw.githubusercontent.com` caches for about five
+  minutes, so a run could finish green while clients still received the previous
+  manifest. The workflow now waits for the endpoint to serve the new version.
+
+### 📄 Documentation
+
+- `docs/macos-code-signing.md` — the Gatekeeper error explained, the per-macOS-version
+  behaviour table, both tester workarounds, and the full certificate/notarization setup.
+- Corrected the now-obsolete "right-click ➔ Open" instructions in
+  `docs/release-process.md` and the release-manager skill.
+
+---
+
 ## [v0.2.0-alpha.4] - 2026-08-11
 
 ### 🐛 Fixed Bugs & Issues

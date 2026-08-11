@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Tauri merges this file into the generated Info.plist. macOS shows these
+	  strings verbatim in the consent dialogs; an app that sends Apple Events
+	  without NSAppleEventsUsageDescription is terminated rather than prompted.
+	-->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Xclense asks Finder to move the files you select into the Trash, so nothing is ever deleted permanently and every cleanup can be undone.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Xclense scans for reclaimable files so it can report what is safe to remove.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Xclense scans for reclaimable files so it can report what is safe to remove.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Xclense reports large and stale downloads that you can choose to clear.</string>
+</dict>
+</plist>
