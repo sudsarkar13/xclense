@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
 	CheckCircle2,
@@ -11,6 +11,8 @@ import {
 	Lock,
 	Radar,
 	RefreshCcw,
+	ShieldAlert,
+	ShieldCheck,
 	Sparkles,
 	Trash2,
 	XIcon,
@@ -28,6 +30,9 @@ import {
 	type StorageCategory,
 	type StorageScanItem,
 	type StorageScanProgressEvent,
+	type PermissionStatus,
+	checkFullDiskAccess,
+	openFullDiskAccessSettings,
 } from "@/lib/tauri-client";
 import { Button } from "@/components/ui/button";
 import {
@@ -182,6 +187,20 @@ export function StorageCleanupOverlay({
 	const [scanProgress, setScanProgress] =
 		useState<StorageScanProgressEvent | null>(null);
 	const [recentFinds, setRecentFinds] = useState<string[]>([]);
+	const [permission, setPermission] = useState<PermissionStatus | null>(null);
+
+	// Queried here rather than passed in, so granting access mid-session is
+	// picked up without the parent page having to re-scan first.
+	const refreshPermission = useCallback((): void => {
+		void checkFullDiskAccess()
+			.then(setPermission)
+			.catch(() => setPermission(null));
+	}, []);
+
+	useEffect(() => {
+		if (!open) return;
+		refreshPermission();
+	}, [open, isScanning, refreshPermission]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -468,6 +487,45 @@ export function StorageCleanupOverlay({
 					{errorMessage ?
 						<div className="rounded-md border border-red-400/40 bg-red-500/10 p-2.5 text-xs text-red-200">
 							{errorMessage}
+						</div>
+					:	null}
+
+					{permission && !permission.fullDiskAccess ?
+						<div className="rounded-md border border-amber-400/35 bg-amber-500/10 p-2.5 text-xs text-amber-100">
+							<div className="flex items-start gap-2">
+								<ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+								<div className="min-w-0 flex-1">
+									<p className="font-semibold">
+										Full Disk Access needed to scan app data
+									</p>
+									<p className="mt-0.5 text-[11px] text-amber-100/80">
+										{permission.protectedLocationCount.toLocaleString()}{" "}
+										protected app locations are being skipped. Without this
+										permission macOS asks for consent once per app, so Xclense
+										skips them rather than burying you in prompts. Granting it
+										once removes the prompts for good.
+									</p>
+									<div className="mt-2 flex flex-wrap items-center gap-2">
+										<button
+											type="button"
+											onClick={() => void openFullDiskAccessSettings()}
+											className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/40 bg-amber-400/15 px-2.5 py-1 text-[11px] font-semibold text-amber-50 transition hover:bg-amber-400/25">
+											<ShieldCheck className="h-3 w-3" />
+											Open Privacy Settings
+										</button>
+										<button
+											type="button"
+											onClick={() => void refreshPermission()}
+											className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-amber-50 transition hover:bg-white/10">
+											I&apos;ve granted it — re-check
+										</button>
+									</div>
+									<p className="mt-1.5 text-[10px] text-amber-100/60">
+										Add Xclense under Privacy &amp; Security ➔ Full Disk Access,
+										then re-check. macOS may ask you to quit and reopen Xclense.
+									</p>
+								</div>
+							</div>
 						</div>
 					:	null}
 

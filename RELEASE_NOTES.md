@@ -1,35 +1,43 @@
-# v0.2.0-alpha.3 — Alpha Release
+# v0.2.0-alpha.4 — Alpha Release
 
-## 🔄 What's Changed (v0.2.0-alpha.2 ➔ v0.2.0-alpha.3)
+## 🔄 What's Changed (v0.2.0-alpha.3 ➔ v0.2.0-alpha.4)
 
 - **Channel**: Alpha Release (Preview Channel)
-- **Platform**: macOS 11+ · **Apple Silicon and Intel** (universal binary)
-- **Install**: If you already run `v0.2.0-alpha.2`, do nothing — this update installs
-  itself. Otherwise download the `.dmg`, drag Xclense to Applications, and on first
-  launch use **right-click ➔ Open** to get past Gatekeeper.
+- **Platform**: macOS 11+ · Apple Silicon and Intel (universal binary)
+- **Install**: Already on `v0.2.0-alpha.2` or later? Do nothing — this installs itself.
+
+### 🐛 Fixed Bugs & Issues
+
+- **No more permission prompt storm during scans.** macOS raises its "would like to
+  access data from other apps" consent dialog once **per app container**, and a scan
+  walks every one of them — roughly 1,000 on a typical machine, each blocking the scan
+  until answered. Xclense now detects whether it holds Full Disk Access and, when it
+  does not, skips those protected locations entirely instead of triggering prompts.
+  A scan now raises **zero** dialogs.
 
 ### ✨ New Features & Enhancements
 
-- **Intel Mac support**: Xclense now ships as a universal binary carrying both `arm64`
-  and `x86_64` slices. One download serves every Mac from 2016 onward.
-- **Intel Macs receive OTA updates**: The update manifest previously advertised only
-  `darwin-aarch64`, so an Intel install found no matching entry and silently never
-  updated — no error, no notice. The manifest now declares both architectures.
+- **Full Disk Access status and one-click grant**: The Scan & clean dialog shows how
+  many protected locations are being skipped and opens System Settings at the correct
+  pane. Granting it once unlocks app container caches and app support data with no
+  prompts at all — macOS Full Disk Access supersedes the per-app consent requirement.
+- **Access re-checked automatically**: Permission state is re-read at the start of
+  every scan, so granting access mid-session takes effect on the next scan without
+  restarting Xclense.
 
-### 🔧 Build & Release Infrastructure
+### 📄 Documentation
 
-- Release builds use `--target universal-apple-darwin`, and the pipeline runs
-  `lipo -archs` to fail the build if either architecture slice is missing. A
-  single-architecture bundle looks entirely normal on the release page and simply
-  fails to launch for half the audience, so this is checked rather than assumed.
-- The update signing key is now backed up in three independent places with tested
-  recovery procedures, instead of existing only on one machine.
+- Added `docs/macos-permissions.md` explaining the TCC behaviour, what is skipped
+  without Full Disk Access, and how detection works.
+- Added a portable `tauri-ota-updates` skill capturing the full OTA setup procedure so
+  it can be applied to other Tauri projects.
 
 ### ⚠️ Alpha Channel Notes
 
+- Without Full Disk Access a scan finds ~72 items instead of ~77; the difference is app
+  container caches and app support data, which are the largest single wins on most
+  machines. Granting access is worth it.
 - The build remains **unsigned and un-notarized**; Gatekeeper warns on first launch.
-- The DMG is larger (~14 MB, was ~8 MB) because it now carries two architectures.
-- A full storage scan takes roughly 30-40 seconds.
 - Cleanup always routes through Finder's Trash — Xclense never deletes permanently.
 
 Report issues at <https://github.com/sudsarkar13/xclense/issues> with the version

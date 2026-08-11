@@ -229,6 +229,17 @@ export interface StorageScanResult {
 	totalRecoverableBytes: number;
 	hiddenItemCount: number;
 	protectedItemCount: number;
+	/** False when macOS TCC would prompt for every protected folder touched. */
+	fullDiskAccess: boolean;
+	/** Category ids skipped because they need Full Disk Access. */
+	skippedCategories: string[];
+}
+
+export interface PermissionStatus {
+	fullDiskAccess: boolean;
+	/** Number of protected locations that stay unscanned without access. */
+	protectedLocationCount: number;
+	message: string;
 }
 
 export type StorageScanPhase =
@@ -404,6 +415,16 @@ export const getStorageDetail = async (): Promise<StorageDetail> => {
 export const scanStorageForCleanup = async (): Promise<StorageScanResult> => {
 	ensureTauriRuntime();
 	return invoke<StorageScanResult>("scan_storage_for_cleanup");
+};
+
+export const checkFullDiskAccess = async (): Promise<PermissionStatus> => {
+	ensureTauriRuntime();
+	return invoke<PermissionStatus>("check_full_disk_access");
+};
+
+export const openFullDiskAccessSettings = async (): Promise<void> => {
+	ensureTauriRuntime();
+	return invoke<void>("open_full_disk_access_settings");
 };
 
 export const cleanupStorageItems = async (

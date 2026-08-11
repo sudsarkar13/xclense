@@ -8,6 +8,39 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [v0.2.0-alpha.4] - 2026-08-11
+
+### 🐛 Fixed Bugs & Issues
+
+- **macOS Permission Prompt Storm**: macOS 14+ raises its "access data from other apps"
+  TCC consent dialog once **per app container**, and `scan_app_container_caches` walked
+  every entry under `~/Library/Containers` (742), `~/Library/Group Containers` (149),
+  and `~/Library/Application Support` (104) — roughly 1,000 blocking dialogs per scan.
+  Xclense now probes for Full Disk Access and, when absent, skips those categories
+  entirely. Verified: zero container paths are touched and 72 items are still found.
+
+### 🚀 Highlights & Features
+
+- **Full Disk Access Detection**: `check_full_disk_access` probes readability of
+  `~/Library/Application Support/com.apple.TCC/TCC.db`, which only FDA-holding
+  processes can open and which does not itself raise a prompt. Re-checked at the start
+  of every scan, so granting access mid-session applies without restarting.
+- **One-Click Grant Flow**: `open_full_disk_access_settings` deep-links to
+  Privacy & Security ➔ Full Disk Access. The Scan & clean dialog reports how many
+  protected locations were skipped and offers a re-check.
+- **Scan Result Transparency**: `StorageScanResult` gained `fullDiskAccess` and
+  `skippedCategories`, so the UI can state exactly what was not examined instead of
+  silently under-reporting.
+
+### 📄 Documentation
+
+- `docs/macos-permissions.md` — TCC behaviour, what is skipped, how detection works,
+  and why a single up-front prompt is not possible.
+- Portable `tauri-ota-updates` skill capturing the whole OTA procedure for reuse on
+  other Tauri projects.
+
+---
+
 ## [v0.2.0-alpha.3] - 2026-08-11
 
 ### 🚀 Highlights & Features

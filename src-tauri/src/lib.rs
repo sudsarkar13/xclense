@@ -109,6 +109,19 @@ pub struct StorageScanResult {
   pub total_recoverable_bytes: u64,
   pub hidden_item_count: u32,
   pub protected_item_count: u32,
+  /// False when macOS TCC would prompt for every protected folder we touch.
+  pub full_disk_access: bool,
+  /// Category ids skipped because they need Full Disk Access.
+  pub skipped_categories: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionStatus {
+  pub full_disk_access: bool,
+  /// Number of protected locations that stay unscanned without access.
+  pub protected_location_count: u32,
+  pub message: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -2248,6 +2261,66 @@ mod commands {
     }
   }
 
+  /// Detects Full Disk Access by reading a path only FDA-granted apps can open.
+  ///
+  /// macOS 14+ guards `~/Library/Containers`, `~/Library/Group Containers`, and
+  /// per-app folders in `~/Library/Application Support` behind the "access data
+  /// from other apps" consent prompt, and it fires **once per app container**.
+  /// With 742 containers on a typical machine that is 742 dialogs, so anything
+  /// touching those paths must be skipped until this returns true.
+  fn has_full_disk_access() -> bool {
+    let home = match home_dir() {
+      Some(value) => value,
+      None => return false,
+    };
+    // Reading TCC.db itself requires Full Disk Access and never prompts —
+    // it fails silently when access is not granted.
+    fs::File::open(home.join("Library/Application Support/com.apple.TCC/TCC.db")).is_ok()
+  }
+
+  /// Locations that stay unscanned without Full Disk Access.
+  fn protected_location_count(home: &Path) -> u32 {
+    let mut count = 0u32;
+    for relative in [
+      "Library/Containers",
+      "Library/Group Containers",
+      "Library/Application Support",
+    ] {
+      if let Ok(entries) = fs::read_dir(home.join(relative)) {
+        count = count.saturating_add(entries.count() as u32);
+      }
+    }
+    count
+  }
+
+  #[tauri::command(async)]
+  pub fn check_full_disk_access() -> Result<PermissionStatus, String> {
+    let granted = has_full_disk_access();
+    let count = home_dir().map(|home| protected_location_count(&home)).unwrap_or(0);
+    Ok(PermissionStatus {
+      full_disk_access: granted,
+      protected_location_count: count,
+      message: if granted {
+        "Full Disk Access granted. Xclense can scan app containers and support data without prompting.".to_string()
+      } else {
+        format!(
+          "Full Disk Access is not granted, so {} protected app locations are skipped. Grant it once to scan them without repeated macOS prompts.",
+          count
+        )
+      },
+    })
+  }
+
+  /// Opens System Settings directly on the Full Disk Access list.
+  #[tauri::command(async)]
+  pub fn open_full_disk_access_settings() -> Result<(), String> {
+    Command::new("open")
+      .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+      .status()
+      .map_err(|error| format!("failed to open System Settings: {}", error))?;
+    Ok(())
+  }
+
   fn category_by_id(categories: &[StorageCategory], id: &str) -> Option<StorageCategory> {
     categories.iter().find(|category| category.id == id).cloned()
   }
@@ -2567,13 +2640,19 @@ mod commands {
   }
 
   /// Dot-folders hidden inside ~/Library and ~/Library/Application Support.
-  fn scan_hidden_support_items(ctx: &mut ScanCtx<'_>, category: &StorageCategory, home: &Path) {
-    let roots = [
-      home.join("Library"),
-      home.join("Library/Application Support"),
-      home.join("Library/Caches"),
-      home.join("Library/Containers"),
-    ];
+  fn scan_hidden_support_items(
+    ctx: &mut ScanCtx<'_>,
+    category: &StorageCategory,
+    home: &Path,
+    full_disk_access: bool,
+  ) {
+    let mut roots = vec![home.join("Library"), home.join("Library/Caches")];
+    // These two are TCC-protected: reading them without Full Disk Access raises
+    // one "access data from other apps" dialog per app.
+    if full_disk_access {
+      roots.push(home.join("Library/Application Support"));
+      roots.push(home.join("Library/Containers"));
+    }
 
     for root in roots {
       let entries = match fs::read_dir(&root) {
@@ -2829,9 +2908,17 @@ mod commands {
           total_recoverable_bytes: 0,
           hidden_item_count: 0,
           protected_item_count: 0,
+          full_disk_access: false,
+          skipped_categories: Vec::new(),
         };
       }
     };
+
+    // Without Full Disk Access, macOS raises a separate consent dialog for every
+    // app container we touch. Skipping those categories entirely is the only way
+    // to avoid burying the user in prompts mid-scan.
+    let full_disk_access = has_full_disk_access();
+    let mut skipped_categories: Vec<String> = Vec::new();
 
     for category in &categories {
       ctx.begin_stage(category);
@@ -2842,7 +2929,11 @@ mod commands {
           continue;
         }
         "hidden_support" => {
-          scan_hidden_support_items(&mut ctx, category, &home);
+          scan_hidden_support_items(&mut ctx, category, &home, full_disk_access);
+          continue;
+        }
+        "app_container_caches" | "app_support_data" if !full_disk_access => {
+          skipped_categories.push(category.id.clone());
           continue;
         }
         "app_container_caches" => {
@@ -3013,6 +3104,8 @@ mod commands {
       total_recoverable_bytes,
       hidden_item_count,
       protected_item_count,
+      full_disk_access,
+      skipped_categories,
     }
   }
 
@@ -3292,6 +3385,8 @@ mod commands {
   }
 
 
+
+
 }
 
 pub fn run() {
@@ -3314,7 +3409,9 @@ pub fn run() {
       commands::run_safe_remediation,
       commands::get_storage_detail,
       commands::scan_storage_for_cleanup,
-      commands::cleanup_storage_items
+      commands::cleanup_storage_items,
+      commands::check_full_disk_access,
+      commands::open_full_disk_access_settings
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
