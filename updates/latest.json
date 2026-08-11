@@ -1,15 +1,15 @@
 {
-  "version": "0.2.0-alpha.3",
-  "notes": "See https://github.com/sudsarkar13/xclense/releases/tag/v0.2.0-alpha.3",
-  "pub_date": "2026-08-10T21:31:55Z",
+  "version": "0.2.0-alpha.4",
+  "notes": "See https://github.com/sudsarkar13/xclense/releases/tag/v0.2.0-alpha.4",
+  "pub_date": "2026-08-11T03:37:39Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd2ZIaVJjUWV5bURJV0o4L1FZbWVPVHd0dFhBUVRTR0NCNXI3VytONllmZVNQWUJsQ3d4MW1TUFpGd1NLYWNvR2R4K0pxTkE3RElpNWovVkpMM1JzT0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Mzk3MzgzCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CkdNeXYyYk96UWpQQThETEYrY2hwVmp1Z1hWZHIwZlhuNjJoL0NVZHFLbE93bFV1bmU2RWI3UmV3UVd4QThZaHZRYmRRaE5ObVN4bWMrd29HZFhqQ0J3PT0K",
-      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.3/Xclense.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd1I1Szg1UEdIeC85cFp5M3Q4TDBTMFMzRDkxSWlGbkMyYWJnRGhZVStac3pIWlF3WHRLaFlyclE5b1hVZkw0YVdXcmxXaFlVbVdRVHcrK0theDRNcFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NDE5MzYwCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CmJzZ2NCeTN2OGprQnQxOThkS0ExK0U5aGdUdXZMRkQ3cUxtaUJlUjcvaGpWU0dlU1paVWd1bWVkbktaVjgxNFZJTGhuMWM3MEpmYWtpZjVlQkhHWEF3PT0K",
+      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.4/Xclense.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd2ZIaVJjUWV5bURJV0o4L1FZbWVPVHd0dFhBUVRTR0NCNXI3VytONllmZVNQWUJsQ3d4MW1TUFpGd1NLYWNvR2R4K0pxTkE3RElpNWovVkpMM1JzT0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2Mzk3MzgzCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CkdNeXYyYk96UWpQQThETEYrY2hwVmp1Z1hWZHIwZlhuNjJoL0NVZHFLbE93bFV1bmU2RWI3UmV3UVd4QThZaHZRYmRRaE5ObVN4bWMrd29HZFhqQ0J3PT0K",
-      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.3/Xclense.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeVZETUthR1Ezd1I1Szg1UEdIeC85cFp5M3Q4TDBTMFMzRDkxSWlGbkMyYWJnRGhZVStac3pIWlF3WHRLaFlyclE5b1hVZkw0YVdXcmxXaFlVbVdRVHcrK0theDRNcFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NDE5MzYwCWZpbGU6WGNsZW5zZS5hcHAudGFyLmd6CmJzZ2NCeTN2OGprQnQxOThkS0ExK0U5aGdUdXZMRkQ3cUxtaUJlUjcvaGpWU0dlU1paVWd1bWVkbktaVjgxNFZJTGhuMWM3MEpmYWtpZjVlQkhHWEF3PT0K",
+      "url": "https://github.com/sudsarkar13/xclense/releases/download/v0.2.0-alpha.4/Xclense.app.tar.gz"
     }
   }
 }
