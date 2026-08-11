@@ -9,6 +9,47 @@ The project follows a dual-layer paradigm:
 
 This separation keeps UI iteration fast while centralizing all privileged operations and system introspection in a strongly typed backend.
 
+## Install
+
+Download the latest `.dmg` from [Releases](https://github.com/sudsarkar13/xclense/releases),
+open it, and drag **Xclense** into Applications. macOS 11+, Apple Silicon and Intel.
+
+### First launch: "Apple could not verify Xclense"
+
+Xclense is free and open source, distributed outside the App Store, and **deliberately
+not code-signed** — a Developer ID certificate costs $99/year, and this project has no
+revenue to justify it. macOS therefore blocks the first launch:
+
+> **"Xclense" Not Opened** — Apple could not verify "Xclense" is free of malware…
+> **[ Done ] [ Move to Bin ]**
+
+Nothing is wrong with the app. macOS is reporting that it cannot identify the publisher,
+which is exactly what it should say about an app that has not paid to be identified.
+Since macOS 15 Sequoia, **right-click ➔ Open no longer works** — use one of these:
+
+**Terminal (one command):**
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Xclense.app
+```
+
+**Or System Settings:** click **Done** on the warning, open **System Settings ➔
+Privacy & Security**, scroll to Security, click **Open Anyway** next to the Xclense
+message, authenticate, then launch again and confirm.
+
+You only do this once per install. Updates delivered by Xclense's own updater are never
+blocked, because Gatekeeper only checks apps downloaded by a browser.
+
+> **Read the command before running it.** `xattr -dr com.apple.quarantine` tells macOS
+> to stop vetting an app, and it is the same instruction malware distributors give their
+> victims. It is safe here because you can read every line of this repository and build
+> the app yourself — but the habit of checking is worth more than this app is.
+
+If you would rather trust nothing: `yarn install && yarn tauri build` produces the same
+bundle from source. See [Local Development](#local-development).
+
+Details and the reasoning: [docs/macos-code-signing.md](docs/macos-code-signing.md).
+
 ## Product Goals
 
 Xclense is intended to provide:

@@ -66,7 +66,47 @@ in-app updater are downloaded by Xclense itself rather than by a browser, so the
 receive a quarantine attribute and never trigger the dialog. That is why alpha.2 ➔
 alpha.3 ➔ alpha.4 updated silently while a fresh DMG download is blocked.
 
-## The actual fix
+## Project position: unsigned is the intended distribution mode
+
+Xclense is free, open source, and distributed outside the App Store. **We do not sign or
+notarize releases**, and that is a decision rather than a gap.
+
+A common misconception is worth clearing up first: **Developer ID signing has nothing to
+do with the App Store.** It is Apple's mechanism for distributing apps *outside* the
+store — the "Developer ID Application" certificate exists precisely for direct download.
+Staying off the App Store does not remove the need for it; the thing that removes the
+need is accepting that users perform a one-time override.
+
+What that choice actually costs, honestly:
+
+| | Unsigned (today) | Developer ID + notarized |
+| --- | --- | --- |
+| Price | Free | $99/year, forever |
+| First launch | One-time override, per install | Opens normally |
+| OTA updates | Work — never blocked | Work |
+| Update payload integrity | Verified by Ed25519 signature | Same |
+| Full Disk Access after an update | May need re-granting | Persists |
+| User trust signal | "unidentified developer" | Named publisher |
+
+The trade is real but small for an open-source tool where users can read and build the
+source. The override is one command or four clicks, and it happens once per install.
+
+Two consequences to be aware of:
+
+- **The bundle carries no real signature at all.** `codesign -d -r-` reports *"code
+  object is not signed at all"* — the ad-hoc, linker-signed marker covers only the inner
+  executable, so `Sealed Resources=none` and the `Info.plist` is unbound.
+- **Code identity changes on every build.** Two builds of the identical version produce
+  different `CDHash` values (verified: `300179e6…` vs `9faeae61…`). macOS has nothing
+  stable to anchor a TCC grant to, so a Full Disk Access grant may need re-applying
+  after an update. This is the one place the missing certificate has a real, recurring
+  user cost — see [docs/macos-permissions.md](macos-permissions.md).
+
+Everything below is what to do **if that calculus ever changes** — a sponsor, donations,
+or enough users that repeated FDA re-grants become the top complaint. It is wired up and
+inactive, not missing.
+
+## What signing would require
 
 Gatekeeper acceptance requires **all** of:
 
@@ -78,8 +118,8 @@ Gatekeeper acceptance requires **all** of:
 3. **Notarization** — the bundle is uploaded to Apple, scanned, and a ticket is issued.
 4. **Stapling** — the ticket is attached to the bundle so first launch works offline.
 
-Steps 2–4 are already wired up in this repo. Only step 1 is outstanding, and it is a
-purchase, not a code change.
+Steps 2–4 are already wired up in this repo and dormant. Step 1 is the purchase we have
+chosen not to make.
 
 ### What is already in place
 
@@ -89,14 +129,23 @@ purchase, not a code change.
 | Entitlements | `src-tauri/Entitlements.plist` | ✅ |
 | Usage descriptions | `src-tauri/Info.plist` | ✅ |
 | Minimum system version | `bundle.macOS.minimumSystemVersion: "11.0"` | ✅ |
-| Signing + notarization in CI | `.github/workflows/release.yml` | ✅ (inactive until secrets exist) |
+| Signing + notarization in CI | `.github/workflows/release.yml` | ✅ (dormant — activates on secrets) |
 | Post-build signature assertion | `.github/workflows/release.yml` | ✅ |
-| Developer ID certificate | Apple Developer Program | ❌ **not purchased** |
+| Developer ID certificate | Apple Developer Program | ➖ **deliberately not purchased** |
 
-The workflow reads every Apple credential from secrets and **falls back to an ad-hoc
-build when they are absent**, so the alpha pipeline keeps working unchanged until the
-membership exists. It emits a `::warning::` on each unsigned release so the state is
-never silently forgotten.
+Adding the six `APPLE_*` secrets is the entire activation step — no code change. Until
+then the workflow falls back to an ad-hoc build and emits a `::warning::` recording that
+the release is unsigned.
+
+> **Why `hardenedRuntime: true` does not affect today's builds.** Tauri only runs
+> `codesign` when a signing identity is present, so with no certificate the setting is
+> inert and the bundle keeps its linker-signed ad-hoc marker
+> (`flags=0x20002(adhoc,linker-signed)`, verified after the change). This is deliberate:
+> applying the hardened runtime to an *ad-hoc* signature would be the worst of both
+> worlds, since the system does not honour privileged entitlements from an untrusted
+> signature and Apple Events — the mechanism behind every Trash operation — could be
+> denied. Hardened runtime is only correct alongside a real certificate, which is
+> exactly when it switches on.
 
 ### Entitlements, and why they are minimal
 
@@ -122,7 +171,9 @@ Deliberately excluded:
   entitlements, but WKWebView runs its JIT in a separate Apple-signed process. The host
   binary needs neither, and unnecessary entitlements only widen the attack surface.
 
-## Enabling signing (maintainer)
+## If signing is ever adopted (maintainer)
+
+Not currently planned. Kept here so the decision stays reversible without re-research.
 
 ### 1. Join the Apple Developer Program
 

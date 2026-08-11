@@ -47,10 +47,20 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ### 📄 Documentation
 
+- **Unsigned Distribution Is the Stated Policy**: Xclense is free, open source, and
+  distributed outside the App Store, so it ships unsigned rather than paying $99/year
+  for a Developer ID. Documented as a decision with its costs stated, not as a gap —
+  including the correction that Developer ID signing is Apple's mechanism for
+  distribution *outside* the App Store, so skipping the store does not remove it.
+- **README install section**: first-launch override instructions, both routes, with an
+  explicit caution about what `xattr -dr com.apple.quarantine` does and a pointer to
+  building from source instead.
 - `docs/macos-code-signing.md` — the Gatekeeper error explained, the per-macOS-version
-  behaviour table, both tester workarounds, and the full certificate/notarization setup.
+  behaviour table, both workarounds, the cost/benefit table, and the dormant
+  certificate/notarization setup should the decision change.
 - Corrected the now-obsolete "right-click ➔ Open" instructions in
-  `docs/release-process.md` and the release-manager skill.
+  `docs/release-process.md` and the release-manager skill; first-launch instructions are
+  now permanent release-note boilerplate.
 
 ---
 

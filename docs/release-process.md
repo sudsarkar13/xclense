@@ -143,15 +143,19 @@ Every pre-release's notes must state:
 
 ### Signing and notarization
 
-Unsigned builds are tolerable for a small invited alpha, where every tester can be
-walked through the override. They are **not** viable for a public beta: on macOS 15+ the
-block is a dead-end dialog offering only *Done* and *Move to Bin*, which most people
-read as "this app is broken".
+**Xclense ships unsigned by design.** It is free and open source, distributed outside
+the App Store, and a Developer ID certificate costs $99/year with no revenue behind it.
+Users perform a one-time override per install; every release's notes must carry those
+instructions, because on macOS 15+ the block is a dead-end *Done / Move to Bin* dialog
+that most people read as "this app is broken".
+
+Note that Developer ID signing is **not** an App Store mechanism — it is Apple's scheme
+for direct distribution. Staying off the store does not remove the requirement;
+accepting the one-time override is what removes it.
 
 The hardened runtime, entitlements, and the full sign ➔ notarize ➔ staple ➔ verify
-pipeline are already in place. The only missing piece is an Apple Developer Program
-membership ($99/year) and the resulting certificate. Adding these repository secrets
-activates it with no code change:
+pipeline are in place but dormant. Should the decision ever change, adding these
+repository secrets activates it with no code change:
 
 ```text
 APPLE_CERTIFICATE           # base64 of the Developer ID Application .p12
@@ -164,7 +168,8 @@ APPLE_API_KEY_CONTENT       # contents of AuthKey_XXXX.p8
 
 Until they exist the workflow builds ad-hoc and emits a warning; once they exist it
 **fails the release** rather than publishing a bundle Gatekeeper would reject. Full
-walkthrough: [docs/macos-code-signing.md](macos-code-signing.md).
+walkthrough and the reasoning behind staying unsigned:
+[docs/macos-code-signing.md](macos-code-signing.md).
 
 ### Architecture coverage
 
