@@ -2278,23 +2278,42 @@ mod commands {
     fs::File::open(home.join("Library/Application Support/com.apple.TCC/TCC.db")).is_ok()
   }
 
-  /// Personal folders macOS guards with their own per-folder consent prompts
-  /// (`kTCCServiceSystemPolicyDesktopFolder` and friends), separate from the
-  /// per-app-container prompt.
+  /// Every location macOS guards behind a consent dialog.
   ///
-  /// Reading any of these raises a dialog the very first time, and unlike the
-  /// container prompt there is no silent probe: *checking* is what triggers it.
-  /// Full Disk Access covers all of them at once, so without it these roots are
-  /// dropped rather than walked. A scan is worth less than a scan that
-  /// interrogates the user five times before it will run.
-  fn tcc_protected_user_dirs(home: &Path) -> [PathBuf; 5] {
-    [
-      home.join("Desktop"),
-      home.join("Documents"),
-      home.join("Downloads"),
-      home.join("Movies"),
-      home.join("Pictures"),
-    ]
+  /// Two different TCC services, same consequence:
+  ///
+  /// * **App data** — `Library/Containers`, `Library/Group Containers`,
+  ///   `Library/Application Support`. One dialog **per app**, so roughly a
+  ///   thousand on a normal machine.
+  /// * **Personal folders** — Desktop, Documents, Downloads, Movies, Pictures.
+  ///   One dialog each.
+  ///
+  /// Unlike the Full Disk Access probe there is no silent way to test these:
+  /// attempting the read *is* what raises the dialog.
+  pub(crate) const CONSENT_GUARDED_ROOTS: [&str; 8] = [
+    "Library/Containers",
+    "Library/Group Containers",
+    "Library/Application Support",
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Movies",
+    "Pictures",
+  ];
+
+  /// Whether reading `path` would raise a consent dialog.
+  ///
+  /// This is deliberately a check on the **path**, not on the category asking
+  /// for it. Gating by category has now failed twice, because guarded paths
+  /// hide inside category definitions — `browser_cache` reads
+  /// `Library/Containers/com.apple.Safari/…` and
+  /// `Library/Application Support/Google/Chrome/…`, so a category-level
+  /// allowlist waved it straight through. Anything that reads the filesystem
+  /// must ask here, and a new scan location cannot bypass it by construction.
+  fn is_consent_guarded(path: &Path, home: &Path) -> bool {
+    CONSENT_GUARDED_ROOTS
+      .iter()
+      .any(|relative| path.starts_with(home.join(relative)))
   }
 
   /// Drops the consent-guarded roots from a walk list unless access is held.
@@ -2302,8 +2321,7 @@ mod commands {
     if full_disk_access {
       return roots;
     }
-    let guarded = tcc_protected_user_dirs(home);
-    roots.into_iter().filter(|root| !guarded.contains(root)).collect()
+    roots.into_iter().filter(|root| !is_consent_guarded(root, home)).collect()
   }
 
   /// Locations that stay unscanned without Full Disk Access.
@@ -3032,6 +3050,16 @@ mod commands {
           continue;
         }
 
+        // The single chokepoint. Categories declare paths freely, and several
+        // of them point inside TCC-guarded roots — reading one raises a dialog
+        // mid-scan. Checking here means no category can reintroduce a prompt.
+        if !full_disk_access && is_consent_guarded(&candidate, &home) {
+          if !skipped_categories.contains(&category.id) {
+            skipped_categories.push(category.id.clone());
+          }
+          continue;
+        }
+
         match category.id.as_str() {
           "downloads" => scan_direct_children(
             &mut ctx,
@@ -3476,7 +3504,10 @@ mod permission_gate_tests {
   #[test]
   fn scan_touches_no_consent_guarded_path_without_full_disk_access() {
     let home = std::path::PathBuf::from(std::env::var("HOME").expect("HOME must be set"));
-    let guarded = ["Desktop", "Documents", "Downloads", "Movies", "Pictures"];
+    // The full guarded set, not just the personal folders. An earlier version
+    // of this test checked only the latter and passed while `browser_cache`
+    // read `Library/Containers/com.apple.Safari` on every scan.
+    let guarded = crate::commands::CONSENT_GUARDED_ROOTS;
 
     let result = crate::commands::scan_storage_categories(None);
 
@@ -3516,3 +3547,4 @@ mod permission_gate_tests {
     }
   }
 }
+

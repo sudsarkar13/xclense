@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
 	CheckCircle2,
 	ChevronRight,
@@ -11,6 +12,7 @@ import {
 	Lock,
 	Radar,
 	RefreshCcw,
+	RotateCcw,
 	ShieldAlert,
 	ShieldCheck,
 	Sparkles,
@@ -196,6 +198,22 @@ export function StorageCleanupOverlay({
 			.then(setPermission)
 			.catch(() => setPermission(null));
 	}, []);
+
+	/**
+	 * macOS decides a process's Full Disk Access when it launches and does not
+	 * revisit it, so a grant made while Xclense is open has no effect until it
+	 * restarts — which is why re-checking in place always reported it missing.
+	 * Restarting is the only thing that actually applies the permission.
+	 */
+	const restartToApplyPermission = useCallback(async (): Promise<void> => {
+		try {
+			await relaunch();
+		} catch {
+			// Relaunch is unavailable outside the desktop shell. Fall back to a
+			// re-check so the button still does something useful in the browser.
+			refreshPermission();
+		}
+	}, [refreshPermission]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -517,14 +535,18 @@ export function StorageCleanupOverlay({
 										</button>
 										<button
 											type="button"
-											onClick={() => void refreshPermission()}
-											className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-amber-50 transition hover:bg-white/10">
-											I&apos;ve granted it — re-check
+											onClick={() => void restartToApplyPermission()}
+											disabled={isScanning || isExecuting}
+											className="inline-flex items-center gap-1.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-amber-50 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50">
+											<RotateCcw className="h-3 w-3" />
+											Granted it — restart Xclense
 										</button>
 									</div>
 									<p className="mt-1.5 text-[10px] text-amber-100/60">
 										Add Xclense under Privacy &amp; Security ➔ Full Disk Access,
-										then re-check. macOS may ask you to quit and reopen Xclense.
+										then restart. macOS only applies the permission to a freshly
+										launched app, so re-checking without restarting always
+										reports it as missing.
 									</p>
 								</div>
 							</div>
