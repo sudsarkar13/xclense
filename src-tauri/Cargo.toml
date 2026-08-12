@@ -1,6 +1,6 @@
 [package]
 name = "Xclense"
-version = "0.2.0-alpha.5"
+version = "0.2.0-alpha.6"
 description = "Xclense system utility backend"
 authors = ["Xclense"]
 license = ""

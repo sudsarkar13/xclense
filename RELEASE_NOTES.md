@@ -1,68 +1,62 @@
-# v0.2.0-alpha.5 — Alpha Release
+# v0.2.0-alpha.6 — Alpha Release
 
-## 🔄 What's Changed (v0.2.0-alpha.4 ➔ v0.2.0-alpha.5)
+## 🔄 What's Changed (v0.2.0-alpha.5 ➔ v0.2.0-alpha.6)
 
 - **Channel**: Alpha Release (Preview Channel)
 - **Platform**: macOS 11+ · Apple Silicon and Intel (universal binary)
 - **Install**: Already on `v0.2.0-alpha.2` or later? Do nothing — this installs itself.
 
-> A small, mostly-infrastructure release. No scanning or cleanup behaviour changed; the
-> user-visible differences are the macOS permission dialogs and the install experience.
+### 🐛 Fixed Bugs & Issues
+
+- **Scans no longer interrupt you with permission prompts.** The Full Disk Access gate
+  added in `alpha.4` covered app containers but missed the personal folders, so a scan
+  still walked `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Movies` and `~/Pictures`.
+  macOS guards each of those with its own consent dialog, so you could be interrupted
+  up to five times per scan while the app claimed protected locations were being
+  skipped. All five are now skipped unless Full Disk Access is held.
+
+  Verified against a real scan without Full Disk Access: **zero** guarded paths read,
+  64 items still found.
+
+- **Old downloads are reported as skipped**, rather than being scanned and prompting.
 
 ### ✨ New Features & Enhancements
 
-- **Permission dialogs now explain themselves.** macOS consent prompts previously
-  appeared without a reason string. Xclense now declares why it needs each kind of
-  access, so the Apple Events prompt reads *"Xclense asks Finder to move the files you
-  select into the Trash, so nothing is ever deleted permanently and every cleanup can be
-  undone"* instead of nothing at all. Desktop, Documents, and Downloads carry
-  descriptions too.
-- **Correct minimum system version.** The bundle now declares macOS 11.0, matching the
-  Apple Silicon slice of the universal binary, rather than Tauri's 10.13 default. Older
-  systems get a clear refusal instead of an app that installs and fails.
-- **Documented install path.** The README and every release now carry first-launch
-  instructions for macOS 15+, where Apple removed the right-click ➔ Open bypass.
+- **Clearer Full Disk Access notice.** The Scan & clean dialog now names what is being
+  left out — app locations plus Downloads, Desktop, Documents, Movies and Pictures — and
+  frames Full Disk Access as the single approval that replaces every prompt, which is
+  what it actually is.
+- **Partial scans still run.** The project and large-file walks drop only the guarded
+  roots and keep scanning `~/Developer`, `~/Projects`, `~/Sites` and similar. A partial
+  scan is worth more than one that interrogates you before it will start.
 
-### 🐛 Fixed Bugs & Issues
+### 🧪 Quality
 
-- **Releases can no longer get stuck as invisible drafts.** A GitHub 5xx during asset
-  upload leaves the release as a *draft* with assets attached; retrying then fails with
-  "already exists" while the draft stays invisible to the updater. This happened during
-  `v0.2.0-alpha.4`. Publishing now retries with backoff, resumes onto an existing
-  release in any state, and verifies the draft flag, pre-release flag, and asset count
-  before reporting success.
-- **Update manifests can no longer advertise an unreachable payload.** The release asset
-  is now fetched anonymously — the way an installed client fetches it — before the
-  manifest points at it. A manifest referencing a private or missing asset breaks every
-  installed copy at once while the release page looks perfectly normal.
-- **Releases no longer report success before clients can see them.** The update endpoint
-  is CDN-cached for about five minutes, so a release could complete while every client
-  still received the previous version. The pipeline now waits for the endpoint to serve
-  the new version.
+- **First test in the project**, guarding exactly this. It asserts on the paths a scan
+  actually reads rather than on the permission gate's own bookkeeping, so it fails when
+  a new scan location is added without being filtered — which is how this regressed
+  twice. CI runs it on a machine with no Full Disk Access, which is the case under test.
 
-### 🔐 Signing
+### 💡 About permissions, in short
 
-Xclense ships **unsigned by design** — it is free, open source, and distributed outside
-the App Store, and a Developer ID certificate costs $99/year. The hardened runtime,
-entitlements, and a full sign ➔ notarize ➔ staple ➔ verify pipeline are in place but
-dormant; they would activate only if that decision ever changes. Reasoning and costs:
-[docs/macos-code-signing.md](docs/macos-code-signing.md).
+macOS provides **no way for an app to request Full Disk Access, and no way to batch
+consent** — Apple made it a manual toggle on purpose. So there are only two possible
+designs, and Xclense now does the second:
 
-### 📄 Documentation
+1. Prompt for each folder, mid-scan — what was happening
+2. Skip everything guarded, and offer one manual grant — what it does now
 
-- `docs/macos-code-signing.md` — the Gatekeeper error explained, behaviour per macOS
-  version, both override routes, and the cost/benefit of signing.
-- README gained an Install section, including an explicit caution about what
-  `xattr -dr com.apple.quarantine` actually does and how to build from source instead.
+**Full Disk Access is the single permission.** One toggle covers every app container and
+all five personal folders, and nothing is asked again. The button in the Scan & clean
+dialog opens the exact settings pane.
 
 ### ⚠️ Alpha Channel Notes
 
-- Without Full Disk Access a scan finds ~72 items instead of ~77; the difference is app
-  container caches and app support data, which are the largest single wins on most
-  machines. Granting access is worth it.
+- Without Full Disk Access a scan finds ~64 items instead of ~77. The difference is app
+  containers, app support data, and your personal folders — often the largest wins.
 - **Full Disk Access may need re-granting after an update.** An unsigned app's code
   identity changes with every build, so macOS has nothing stable to bind the grant to.
-  If your granted access does not survive this update, that is why — please report it.
+  If your grant does not survive this update, please report it — that is useful signal.
 - Cleanup always routes through Finder's Trash — Xclense never deletes permanently.
 
 ### 🔓 First launch on macOS 15 Sequoia and macOS 26 Tahoe

@@ -8,6 +8,39 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [v0.2.0-alpha.6] - 2026-08-12
+
+### 🐛 Fixed Bugs & Issues
+
+- **Consent Prompts For Personal Folders**: the Full Disk Access gate from `alpha.4`
+  covered `app_container_caches` and `app_support_data` but not the personal folders, so
+  three separate walks — the `downloads` category, the project/build-cache walk, and the
+  large-file walk — still read `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Movies` and
+  `~/Pictures`. macOS guards each with its own consent dialog, so a scan could interrupt
+  the user five times while simultaneously reporting that protected locations were being
+  skipped. Unlike the container prompt there is no silent probe for these — attempting
+  the check is what raises the dialog — so gating on Full Disk Access is the only
+  available fix. Verified: zero guarded paths read, 64 items still found.
+- **Partial Scans Preserved**: the project and large-file walks drop only the guarded
+  roots and continue scanning `~/Developer`, `~/Projects`, `~/Sites` and similar, rather
+  than being skipped wholesale.
+
+### 🧪 Testing
+
+- **First test in the project.** `permission_gate_tests` asserts on the paths a scan
+  actually reads rather than on the gate's own bookkeeping, so it fails when a new walk
+  root is added without being filtered — the exact mechanism by which this regressed
+  twice. CI now runs `cargo test`; GitHub runners hold no Full Disk Access, which is
+  precisely the condition under test.
+
+### 🚀 Highlights & Features
+
+- **Full Disk Access Notice Rewritten**: names the folders being skipped and presents
+  Full Disk Access as the single approval that replaces every prompt, instead of
+  explaining the per-app consent mechanism. Dialog geometry unchanged.
+
+---
+
 ## [v0.2.0-alpha.5] - 2026-08-12
 
 ### 🚀 Highlights & Features
