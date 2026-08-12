@@ -50,6 +50,33 @@ bundle from source. See [Local Development](#local-development).
 
 Details and the reasoning: [docs/macos-code-signing.md](docs/macos-code-signing.md).
 
+### Installed, but not showing up in app search?
+
+If Xclense is in `/Applications` but does not appear in Spotlight or the Applications
+view, macOS is almost certainly resolving `com.xclense.app` to a *different* copy of the
+bundle. This happens when another `Xclense.app` exists somewhere else — most often a
+build output under `src-tauri/target/` on a machine that also develops Xclense.
+LaunchServices keys apps by bundle identifier and prefers whichever copy ran most
+recently, so the installed one gets shadowed.
+
+Check which copy macOS resolves to:
+
+```bash
+osascript -e 'tell application "Finder" to get POSIX path of (application file id "com.xclense.app" as alias)'
+mdfind "kMDItemFSName == 'Xclense.app'"        # every copy on disk
+```
+
+If it points anywhere other than `/Applications/Xclense.app`, point it back:
+
+```bash
+LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+$LSR -u /path/to/the/other/Xclense.app     # unregister the shadowing copy
+$LSR -f /Applications/Xclense.app          # re-register the installed one
+```
+
+Deleting the stray copy works just as well. This cannot happen on a machine that only
+ever installed from the DMG — there is only one bundle to resolve to.
+
 ## Product Goals
 
 Xclense is intended to provide:

@@ -181,6 +181,25 @@ open src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app
 Confirm the dashboard loads, the storage scan runs to completion with live progress,
 and the version in the About/`ping_backend` response matches the target version.
 
+> **Then unregister it.** Launching the build-directory bundle registers that path
+> against `com.xclense.app` in LaunchServices, and it wins over
+> `/Applications/Xclense.app` because it was launched more recently. The installed copy
+> then stops appearing in the Applications view / Spotlight app search, or the entry
+> resolves to the build path instead — which looks exactly like "the DMG did not
+> install properly". Always clean up after a local smoke test:
+>
+> ```bash
+> LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+> $LSR -u src-tauri/target/universal-apple-darwin/release/bundle/macos/Xclense.app
+> $LSR -f /Applications/Xclense.app
+> # Confirm the bundle id resolves to the installed copy, not the build output:
+> osascript -e 'tell application "Finder" to get POSIX path of (application file id "com.xclense.app" as alias)'
+> ```
+>
+> `src-tauri/target/.metadata_never_index` keeps build output out of Spotlight, but it
+> is inside a gitignored tree and `cargo clean` removes it — recreate it with `touch`
+> after any clean.
+
 ### 5. Write version-specific notes
 
 Overwrite `RELEASE_NOTES.md` with the previous ➔ new delta (format above), and prepend
