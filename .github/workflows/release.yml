@@ -85,6 +85,10 @@ jobs:
         id: apple
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          # Read through the environment, never interpolated into the script
+          # body — a secret on a command line ends up in traces and breaks on
+          # any quote it happens to contain.
+          CERT_B64: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
           if [ -n "$APPLE_API_KEY_CONTENT" ]; then
             KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
@@ -93,7 +97,7 @@ jobs:
             echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
           fi
           # Distinguishes a signed release build from the unsigned fallback.
-          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+          if [ -n "$CERT_B64" ]; then
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
@@ -106,19 +110,41 @@ jobs:
           # not produced and installed clients reject the update.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Gatekeeper signing. All of these are optional: with none of them set
-          # the bundler falls back to an ad-hoc signature and the build still
-          # succeeds, which is what keeps the alpha pipeline running before the
-          # Apple Developer Program membership exists.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # Notarization via the App Store Connect API. Tauri notarizes and
-          # staples automatically once these are present.
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ steps.apple.outputs.key_path }}
-        run: yarn tauri build --target universal-apple-darwin
+          # Gatekeeper signing, staged under neutral names. These MUST NOT be
+          # exported as APPLE_* here: an unset GitHub secret interpolates to the
+          # empty string, not to nothing, and Tauri branches on whether
+          # APPLE_CERTIFICATE is *defined* rather than whether it is non-empty.
+          # Defining it as "" made the bundler run `security import` on empty
+          # data and abort the whole build with "failed to import keychain
+          # certificate" — the release simply never published.
+          CERT_B64: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          API_KEY_PATH: ${{ steps.apple.outputs.key_path }}
+        run: |
+          # Export the APPLE_* names only when there is a real value behind
+          # them, so an unconfigured repo builds ad-hoc instead of failing.
+          if [ -n "$CERT_B64" ]; then
+            export APPLE_CERTIFICATE="$CERT_B64"
+            export APPLE_CERTIFICATE_PASSWORD="$CERT_PASSWORD"
+            [ -n "$SIGNING_IDENTITY" ] && export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+            echo "Signing with a Developer ID certificate."
+          else
+            echo "No certificate configured — building ad-hoc."
+          fi
+
+          # Notarization needs all three or none; a partial set fails late, in
+          # Apple's service, rather than here.
+          if [ -n "$API_ISSUER" ] && [ -n "$API_KEY" ] && [ -n "$API_KEY_PATH" ]; then
+            export APPLE_API_ISSUER="$API_ISSUER"
+            export APPLE_API_KEY="$API_KEY"
+            export APPLE_API_KEY_PATH="$API_KEY_PATH"
+            echo "Notarization credentials present."
+          fi
+
+          yarn tauri build --target universal-apple-darwin
 
       # Signing failures are silent in the worst way: the bundle still builds,
       # the release still publishes, and only the tester finds out. Assert the
