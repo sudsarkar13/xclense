@@ -8,6 +8,33 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [v0.2.0-alpha.7] - 2026-08-13
+
+### 🐛 Fixed Bugs & Issues
+
+- **Consent Prompts, Guarded At The Path Level**: the `alpha.6` gate allowlisted
+  *categories*, but guarded paths are declared **inside** category definitions, so
+  `browser_cache` read `Library/Containers/com.apple.Safari/Data/Library/Caches` and
+  `Library/Application Support/Google/Chrome/…` on every scan and the category check
+  passed it through. `is_consent_guarded()` is now consulted wherever a category prefix
+  is resolved, so no category can reintroduce a prompt and a newly added scan location
+  cannot bypass it by construction. Measured: `browser_cache` moved from silently
+  scanned to correctly reported among the skipped categories.
+- **Full Disk Access Grant Now Applies**: *"I've granted it — re-check"* could not have
+  worked. macOS resolves a process's Full Disk Access at launch and never revisits it,
+  so a grant made while Xclense is running has no effect until it restarts, and
+  re-checking in place was guaranteed to report the permission as missing. The control
+  now restarts the app through the process plugin — the only action that applies the
+  grant — and is disabled while a scan or cleanup is in flight.
+
+### 🧪 Testing
+
+- `permission_gate_tests` now asserts against the full `CONSENT_GUARDED_ROOTS` set
+  rather than the personal folders alone. The narrower assertion is precisely why it
+  passed while a Safari container was being read on every scan.
+
+---
+
 ## [v0.2.0-alpha.6] - 2026-08-12
 
 ### 🐛 Fixed Bugs & Issues

@@ -1,59 +1,54 @@
-# v0.2.0-alpha.6 — Alpha Release
+# v0.2.0-alpha.7 — Alpha Release
 
-## 🔄 What's Changed (v0.2.0-alpha.5 ➔ v0.2.0-alpha.6)
+## 🔄 What's Changed (v0.2.0-alpha.6 ➔ v0.2.0-alpha.7)
 
 - **Channel**: Alpha Release (Preview Channel)
 - **Platform**: macOS 11+ · Apple Silicon and Intel (universal binary)
 - **Install**: Already on `v0.2.0-alpha.2` or later? Do nothing — this installs itself.
 
+> Fixes the two problems reported against `alpha.6`: scans still raised permission
+> prompts, and the "I've granted it" button did nothing.
+
 ### 🐛 Fixed Bugs & Issues
 
-- **Scans no longer interrupt you with permission prompts.** The Full Disk Access gate
-  added in `alpha.4` covered app containers but missed the personal folders, so a scan
-  still walked `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Movies` and `~/Pictures`.
-  macOS guards each of those with its own consent dialog, so you could be interrupted
-  up to five times per scan while the app claimed protected locations were being
-  skipped. All five are now skipped unless Full Disk Access is held.
+- **Scans no longer raise permission prompts — for real this time.** The `alpha.6` gate
+  checked *categories*, but guarded paths are declared **inside** category definitions.
+  Browser caches read `Library/Containers/com.apple.Safari/…` and
+  `Library/Application Support/Google/Chrome/…` on every scan, and the category check
+  waved them straight through. The guard is now applied to **every path** before it is
+  read, so no category can reintroduce a prompt and a newly added scan location cannot
+  bypass it.
 
-  Verified against a real scan without Full Disk Access: **zero** guarded paths read,
-  64 items still found.
+  Browser caches were leaking on every scan and nothing reported it. They are now
+  correctly listed among the skipped categories.
 
-- **Old downloads are reported as skipped**, rather than being scanned and prompting.
-
-### ✨ New Features & Enhancements
-
-- **Clearer Full Disk Access notice.** The Scan & clean dialog now names what is being
-  left out — app locations plus Downloads, Desktop, Documents, Movies and Pictures — and
-  frames Full Disk Access as the single approval that replaces every prompt, which is
-  what it actually is.
-- **Partial scans still run.** The project and large-file walks drop only the guarded
-  roots and keep scanning `~/Developer`, `~/Projects`, `~/Sites` and similar. A partial
-  scan is worth more than one that interrogates you before it will start.
+- **"Granted it" now actually applies the permission.** The old *"I've granted it —
+  re-check"* button could never have worked: macOS decides a process's Full Disk Access
+  when it launches and never revisits it, so a grant made while Xclense is open has no
+  effect until it restarts. Re-checking in place was guaranteed to report the permission
+  as still missing. The button now **restarts Xclense**, which is the only action that
+  applies the grant. It is disabled while a scan or cleanup is running so nothing is cut
+  off midway.
 
 ### 🧪 Quality
 
-- **First test in the project**, guarding exactly this. It asserts on the paths a scan
-  actually reads rather than on the permission gate's own bookkeeping, so it fails when
-  a new scan location is added without being filtered — which is how this regressed
-  twice. CI runs it on a machine with no Full Disk Access, which is the case under test.
+- The permission test now asserts against the **full** set of guarded locations rather
+  than only the personal folders. The narrower version is exactly why it passed while
+  Safari's container was being read on every scan.
 
-### 💡 About permissions, in short
+### 💡 Granting Full Disk Access — the correct sequence
 
-macOS provides **no way for an app to request Full Disk Access, and no way to batch
-consent** — Apple made it a manual toggle on purpose. So there are only two possible
-designs, and Xclense now does the second:
+1. Open the Scan & clean dialog and click **Open Privacy Settings**
+2. Enable **Xclense** in Privacy & Security ➔ Full Disk Access
+3. Click **Granted it — restart Xclense**
 
-1. Prompt for each folder, mid-scan — what was happening
-2. Skip everything guarded, and offer one manual grant — what it does now
-
-**Full Disk Access is the single permission.** One toggle covers every app container and
-all five personal folders, and nothing is asked again. The button in the Scan & clean
-dialog opens the exact settings pane.
+Step 3 is not optional. macOS will keep reporting the permission as missing until the
+app is relaunched, no matter how many times you re-check.
 
 ### ⚠️ Alpha Channel Notes
 
-- Without Full Disk Access a scan finds ~64 items instead of ~77. The difference is app
-  containers, app support data, and your personal folders — often the largest wins.
+- Without Full Disk Access a scan finds ~65 items instead of ~77. The difference is app
+  containers, app support data, browser caches, and your personal folders.
 - **Full Disk Access may need re-granting after an update.** An unsigned app's code
   identity changes with every build, so macOS has nothing stable to bind the grant to.
   If your grant does not survive this update, please report it — that is useful signal.
