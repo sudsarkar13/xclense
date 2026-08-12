@@ -496,14 +496,16 @@ export function StorageCleanupOverlay({
 								<ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
 								<div className="min-w-0 flex-1">
 									<p className="font-semibold">
-										Full Disk Access needed to scan app data
+										Grant Full Disk Access once to scan everything
 									</p>
 									<p className="mt-0.5 text-[11px] text-amber-100/80">
-										{permission.protectedLocationCount.toLocaleString()}{" "}
-										protected app locations are being skipped. Without this
-										permission macOS asks for consent once per app, so Xclense
-										skips them rather than burying you in prompts. Granting it
-										once removes the prompts for good.
+										Xclense is skipping{" "}
+										{permission.protectedLocationCount.toLocaleString()} app
+										locations, plus Downloads, Desktop, Documents, Movies and
+										Pictures. macOS guards each of those separately and asks
+										every time, so Xclense skips them rather than interrupting
+										your scan with prompts. Full Disk Access replaces all of
+										them with a single approval — nothing is asked again.
 									</p>
 									<div className="mt-2 flex flex-wrap items-center gap-2">
 										<button

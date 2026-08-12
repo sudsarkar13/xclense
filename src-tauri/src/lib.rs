@@ -2278,6 +2278,34 @@ mod commands {
     fs::File::open(home.join("Library/Application Support/com.apple.TCC/TCC.db")).is_ok()
   }
 
+  /// Personal folders macOS guards with their own per-folder consent prompts
+  /// (`kTCCServiceSystemPolicyDesktopFolder` and friends), separate from the
+  /// per-app-container prompt.
+  ///
+  /// Reading any of these raises a dialog the very first time, and unlike the
+  /// container prompt there is no silent probe: *checking* is what triggers it.
+  /// Full Disk Access covers all of them at once, so without it these roots are
+  /// dropped rather than walked. A scan is worth less than a scan that
+  /// interrogates the user five times before it will run.
+  fn tcc_protected_user_dirs(home: &Path) -> [PathBuf; 5] {
+    [
+      home.join("Desktop"),
+      home.join("Documents"),
+      home.join("Downloads"),
+      home.join("Movies"),
+      home.join("Pictures"),
+    ]
+  }
+
+  /// Drops the consent-guarded roots from a walk list unless access is held.
+  fn permitted_roots(roots: Vec<PathBuf>, home: &Path, full_disk_access: bool) -> Vec<PathBuf> {
+    if full_disk_access {
+      return roots;
+    }
+    let guarded = tcc_protected_user_dirs(home);
+    roots.into_iter().filter(|root| !guarded.contains(root)).collect()
+  }
+
   /// Locations that stay unscanned without Full Disk Access.
   fn protected_location_count(home: &Path) -> u32 {
     let mut count = 0u32;
@@ -2885,7 +2913,7 @@ mod commands {
     }
   }
 
-  fn scan_storage_categories(app: Option<&tauri::AppHandle>) -> StorageScanResult {
+  pub(crate) fn scan_storage_categories(app: Option<&tauri::AppHandle>) -> StorageScanResult {
     let started_at = now_epoch_ms();
     let categories = default_storage_categories();
     let mut ctx = ScanCtx::new(app, categories.len() as u32);
@@ -2932,7 +2960,10 @@ mod commands {
           scan_hidden_support_items(&mut ctx, category, &home, full_disk_access);
           continue;
         }
-        "app_container_caches" | "app_support_data" if !full_disk_access => {
+        // Every one of these reads a consent-guarded personal folder. Without
+        // Full Disk Access each would raise its own dialog mid-scan, so the
+        // whole category is skipped and reported instead.
+        "app_container_caches" | "app_support_data" | "downloads" if !full_disk_access => {
           skipped_categories.push(category.id.clone());
           continue;
         }
@@ -2944,17 +2975,21 @@ mod commands {
           // Both are collected in a single project walk, driven by node_modules.
           if category.id == "node_modules" {
             let build_cache_category = category_by_id(&categories, "project_build_caches");
-            let roots = [
-              home.join("Developer"),
-              home.join("Projects"),
-              home.join("Sites"),
-              home.join("Documents"),
-              home.join("Desktop"),
-              home.join("Downloads"),
-              home.join("repos"),
-              home.join("code"),
-              home.join("work"),
-            ];
+            let roots = permitted_roots(
+              vec![
+                home.join("Developer"),
+                home.join("Projects"),
+                home.join("Sites"),
+                home.join("Documents"),
+                home.join("Desktop"),
+                home.join("Downloads"),
+                home.join("repos"),
+                home.join("code"),
+                home.join("work"),
+              ],
+              &home,
+              full_disk_access,
+            );
             for root in roots {
               walk_project_dirs(
                 &mut ctx,
@@ -2969,16 +3004,20 @@ mod commands {
           continue;
         }
         "large_files" => {
-          let roots = [
-            home.join("Downloads"),
-            home.join("Desktop"),
-            home.join("Documents"),
-            home.join("Movies"),
-            home.join("Pictures"),
-            home.join("Developer"),
-            home.join("Projects"),
-            home.join("Sites"),
-          ];
+          let roots = permitted_roots(
+            vec![
+              home.join("Downloads"),
+              home.join("Desktop"),
+              home.join("Documents"),
+              home.join("Movies"),
+              home.join("Pictures"),
+              home.join("Developer"),
+              home.join("Projects"),
+              home.join("Sites"),
+            ],
+            &home,
+            full_disk_access,
+          );
           for root in roots {
             walk_for_large_files(&mut ctx, &root, category, 7, 120_000);
           }
@@ -3415,4 +3454,65 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+
+#[cfg(test)]
+mod permission_gate_tests {
+  /// A scan must raise **zero** consent dialogs when Full Disk Access is absent.
+  ///
+  /// This has regressed twice. macOS guards `~/Desktop`, `~/Documents`,
+  /// `~/Downloads`, `~/Movies` and `~/Pictures` with per-folder prompts, and
+  /// `~/Library/Containers` with a prompt *per container* — roughly a thousand
+  /// on a normal machine. Both times the gate covered some of those paths and
+  /// silently missed others, which is invisible in code review and obvious to
+  /// the user as a wall of dialogs.
+  ///
+  /// Asserting on paths rather than on the gate's own bookkeeping is
+  /// deliberate: it fails when a *new* walk root is added without being
+  /// filtered, which is exactly how this broke before.
+  ///
+  /// Skips itself when FDA is held, since the gate is then a no-op by design.
+  #[test]
+  fn scan_touches_no_consent_guarded_path_without_full_disk_access() {
+    let home = std::path::PathBuf::from(std::env::var("HOME").expect("HOME must be set"));
+    let guarded = ["Desktop", "Documents", "Downloads", "Movies", "Pictures"];
+
+    let result = crate::commands::scan_storage_categories(None);
+
+    if result.full_disk_access {
+      eprintln!("Full Disk Access is held — the gate is inert, nothing to verify.");
+      return;
+    }
+
+    let offenders: Vec<&str> = result
+      .items
+      .iter()
+      .map(|item| item.path.as_str())
+      .filter(|path| {
+        guarded.iter().any(|dir| {
+          home
+            .join(dir)
+            .to_str()
+            .is_some_and(|guarded_root| path.starts_with(guarded_root))
+        })
+      })
+      .collect();
+
+    assert!(
+      offenders.is_empty(),
+      "scan read {} consent-guarded path(s) without Full Disk Access, \
+       which raises a dialog for each one. First few: {:?}",
+      offenders.len(),
+      offenders.iter().take(5).collect::<Vec<_>>()
+    );
+
+    for required in ["downloads", "app_container_caches", "app_support_data"] {
+      assert!(
+        result.skipped_categories.iter().any(|id| id == required),
+        "category '{required}' reads guarded paths and must be reported as skipped, \
+         so the UI can tell the user what was left out"
+      );
+    }
+  }
 }

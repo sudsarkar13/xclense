@@ -73,6 +73,14 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --locked
 
+      # The permission gate has regressed twice, and the symptom — a wall of
+      # macOS consent dialogs — only appears on a real machine, never in review.
+      # The runner has no Full Disk Access, which is exactly the case the gate
+      # must handle, so this asserts against real filesystem behaviour.
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked
+
   version-consistency:
     name: Version consistency across manifests
     runs-on: ubuntu-latest
