@@ -8,7 +8,13 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
-## [Unreleased]
+## [v0.2.0-alpha.5] - 2026-08-12
+
+### 🚀 Highlights & Features
+
+- **Consent Dialogs Carry Reasons**: `src-tauri/Info.plist` declares
+  `NSAppleEventsUsageDescription` plus Desktop/Documents/Downloads usage strings, so
+  macOS explains why each permission is being requested instead of prompting blankly.
 
 ### 🔐 Signing & Distribution
 
