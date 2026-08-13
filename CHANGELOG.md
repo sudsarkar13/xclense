@@ -8,6 +8,47 @@ the `-alpha.N` and `-beta.N` suffixes described in
 
 ---
 
+## [v0.2.0-alpha.8] - 2026-08-13
+
+### 🚀 Highlights & Features
+
+- **Memory Diagnosis Engine**: `diagnose_memory()` classifies the cause of memory
+  pressure — swap thrashing, wired bloat, cache pressure, a dominant process, or no
+  single cause — because each needs a different answer and they were previously
+  indistinguishable. Ordering is by which cause dominates rather than which is easiest
+  to fix: swap and wired bloat both make cache-clearing pointless, so they are ruled out
+  before `purge` is ever suggested. Exposed as `diagnose_memory_condition`.
+- **Swap And Full `vm_stat` Breakdown**: swap usage, wired, active, inactive and
+  compressed memory are now collected. Swap was never read at all — `grep swapusage`
+  returned zero hits — so a machine paging itself to death was indistinguishable from
+  one that had never swapped. The health card shows wired and swap directly.
+- **Honest Remediation**: a new advisory step, `restart_to_reclaim_memory`, states that
+  macOS releases wired memory and swap only on reboot. `reclaimableBytes` reports `0`
+  in those cases rather than implying something can be recovered.
+
+### 🐛 Fixed Bugs & Issues
+
+- **Misleading Pressure Formula**: pressure was `(total − free) / total`, which counts
+  reclaimable file cache as used, so an idle Mac with a warm cache reported ~95% and was
+  indistinguishable from one genuinely out of memory. It is now wired + active +
+  compressed over total — only memory that cannot be reclaimed on demand. The reference
+  machine reads 84.9% rather than 99.3%.
+- **`free_inactive_memory` Reported False Success**: it ran `purge` regardless of
+  whether anything was worth releasing and reported success either way. On a machine at
+  97% swap with 0.58 GB of cache it freed a rounding error and declared the problem
+  handled. It now skips with an explanation below a 1 GB threshold, and is not suggested
+  while swap or wired memory is the actual cause.
+
+### 🧪 Testing
+
+- Seven deterministic tests covering every failure mode, including that swap outranks
+  wired memory when both are critical, and that a warm file cache is not reported as
+  pressure — the false positive the previous formula produced on healthy machines.
+- Validated against a live 8 GB machine at 97% swap and 54% wired: `SwapThrashing`,
+  restart required, `reclaimable 0.00 GB`.
+
+---
+
 ## [v0.2.0-alpha.7] - 2026-08-13
 
 ### 🐛 Fixed Bugs & Issues

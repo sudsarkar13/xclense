@@ -1,57 +1,79 @@
-# v0.2.0-alpha.7 — Alpha Release
+# v0.2.0-alpha.8 — Alpha Release
 
-## 🔄 What's Changed (v0.2.0-alpha.6 ➔ v0.2.0-alpha.7)
+## 🔄 What's Changed (v0.2.0-alpha.7 ➔ v0.2.0-alpha.8)
 
 - **Channel**: Alpha Release (Preview Channel)
 - **Platform**: macOS 11+ · Apple Silicon and Intel (universal binary)
 - **Install**: Already on `v0.2.0-alpha.2` or later? Do nothing — this installs itself.
 
-> Fixes the two problems reported against `alpha.6`: scans still raised permission
-> prompts, and the "I've granted it" button did nothing.
+> Xclense now works out **why** memory is under pressure, and says so — including when
+> the honest answer is that nothing it can run will help.
+
+### ✨ New Features & Enhancements
+
+- **Swap is measured.** It never was. A machine paging itself to death looked identical
+  to one that had never swapped, because the only value read from `vm_stat` was
+  `Pages free`. Swap usage, wired, active, inactive and compressed memory are all
+  collected now.
+
+- **Memory diagnosis.** Xclense distinguishes five conditions that were previously
+  indistinguishable and each need a different answer:
+
+  | Condition | What actually helps |
+  | --- | --- |
+  | Swap near capacity | Restart — macOS drains swap only as demand falls |
+  | Wired memory bloated | Restart — wired memory is never released to apps |
+  | Large file cache | Releasing it genuinely frees that much |
+  | One dominant process | Quit that process, named in the report |
+  | No single cause | Close several, or restart |
+
+- **Advice you can act on.** Where a remedy exists, Xclense says what it will recover.
+  Where none does, it says a restart is required rather than running something that
+  reports success and changes nothing.
 
 ### 🐛 Fixed Bugs & Issues
 
-- **Scans no longer raise permission prompts — for real this time.** The `alpha.6` gate
-  checked *categories*, but guarded paths are declared **inside** category definitions.
-  Browser caches read `Library/Containers/com.apple.Safari/…` and
-  `Library/Application Support/Google/Chrome/…` on every scan, and the category check
-  waved them straight through. The guard is now applied to **every path** before it is
-  read, so no category can reintroduce a prompt and a newly added scan location cannot
-  bypass it.
+- **Memory pressure was misleading in both directions.** It was computed as
+  `(total − free) / total`, which counts reclaimable file cache as used. An idle Mac
+  with a warm cache reported ~95% and looked identical to one that was genuinely dying.
+  Pressure is now wired + active + compressed — only memory that cannot be reclaimed on
+  demand.
 
-  Browser caches were leaking on every scan and nothing reported it. They are now
-  correctly listed among the skipped categories.
-
-- **"Granted it" now actually applies the permission.** The old *"I've granted it —
-  re-check"* button could never have worked: macOS decides a process's Full Disk Access
-  when it launches and never revisits it, so a grant made while Xclense is open has no
-  effect until it restarts. Re-checking in place was guaranteed to report the permission
-  as still missing. The button now **restarts Xclense**, which is the only action that
-  applies the grant. It is disabled while a scan or cleanup is running so nothing is cut
-  off midway.
+- **"Free inactive memory" no longer claims a fix it did not deliver.** It ran
+  `purge` regardless of whether there was anything worth releasing, and reported
+  success either way. It now skips with an explanation when cached memory is under 1 GB,
+  and is never suggested at all while swap or wired memory is the real problem —
+  `purge` cannot touch either.
 
 ### 🧪 Quality
 
-- The permission test now asserts against the **full** set of guarded locations rather
-  than only the personal folders. The narrower version is exactly why it passed while
-  Safari's container was being read on every scan.
+- Seven tests covering every failure mode, including that swap outranks wired memory
+  when both are critical, and that a warm file cache is **not** reported as pressure —
+  the false positive the old formula produced on healthy machines.
 
-### 💡 Granting Full Disk Access — the correct sequence
+### 📊 Validated against a real machine
 
-1. Open the Scan & clean dialog and click **Open Privacy Settings**
-2. Enable **Xclense** in Privacy & Security ➔ Full Disk Access
-3. Click **Granted it — restart Xclense**
+Developed against an 8 GB Mac in genuine distress, not a synthetic fixture:
 
-Step 3 is not optional. macOS will keep reporting the permission as missing until the
-app is relaunched, no matter how many times you re-check.
+```text
+swap 14.53 / 15.00 GB (97%) · wired 4.32 GB (54%) · inactive 0.58 GB
+
+mode:     SwapThrashing
+action:   restart required
+reclaim:  0.00 GB
+```
+
+The previous build would have reported 99% pressure, run `purge`, declared success, and
+left the machine at 97% swap.
 
 ### ⚠️ Alpha Channel Notes
 
-- Without Full Disk Access a scan finds ~65 items instead of ~77. The difference is app
-  containers, app support data, browser caches, and your personal folders.
-- **Full Disk Access may need re-granting after an update.** An unsigned app's code
-  identity changes with every build, so macOS has nothing stable to bind the grant to.
-  If your grant does not survive this update, please report it — that is useful signal.
+- The diagnosis thresholds (35% wired, 80% swap, 1 GB cache floor) are reasoned rather
+  than calibrated across many machines. If a verdict looks wrong on your hardware,
+  please report it with the figures shown on the health card — that is exactly the
+  feedback needed.
+- Full Disk Access may need re-granting after an update; an unsigned app's code identity
+  changes with every build.
 - Cleanup always routes through Finder's Trash — Xclense never deletes permanently.
 
 ### 🔓 First launch on macOS 15 Sequoia and macOS 26 Tahoe
