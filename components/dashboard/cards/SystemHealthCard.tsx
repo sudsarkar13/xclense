@@ -29,6 +29,10 @@ interface SystemHealthCardProps {
 	memoryUsedBytes: number;
 	memoryFreeBytes: number;
 	memoryPressurePercent: number;
+	memoryWiredBytes: number;
+	swapUsedBytes: number;
+	swapTotalBytes: number;
+	swapUsedPercent: number;
 	loadAverage1m: number;
 	loadAverage5m: number;
 	loadAverage15m: number;
@@ -70,6 +74,10 @@ export function SystemHealthCard({
 	memoryUsedBytes,
 	memoryFreeBytes,
 	memoryPressurePercent,
+	memoryWiredBytes,
+	swapUsedBytes,
+	swapTotalBytes,
+	swapUsedPercent,
 	loadAverage1m,
 	loadAverage5m,
 	loadAverage15m,
@@ -255,6 +263,22 @@ export function SystemHealthCard({
 					<p>
 						<span className="text-zinc-400">Used/Free:</span>{" "}
 						{formatGb(memoryUsedBytes)} / {formatGb(memoryFreeBytes)}
+					</p>
+					{/* Wired memory is unpageable, so a high value means no amount of
+					    quitting apps will help. Showing it is what makes an otherwise
+					    baffling "everything is slow" state explicable. */}
+					<p>
+						<span className="text-zinc-400">Wired:</span>{" "}
+						{formatGb(memoryWiredBytes)}
+						{memoryTotalBytes > 0 ?
+							` (${Math.round((memoryWiredBytes / memoryTotalBytes) * 100)}%)`
+						:	""}
+					</p>
+					<p>
+						<span className="text-zinc-400">Swap:</span>{" "}
+						{swapTotalBytes > 0 ?
+							`${formatGb(swapUsedBytes)} / ${formatGb(swapTotalBytes)} (${Math.round(swapUsedPercent)}%)`
+						:	"unused"}
 					</p>
 					<p>
 						<span className="text-zinc-400">Refresh:</span> every{" "}

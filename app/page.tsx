@@ -469,6 +469,10 @@ export default function Home(): React.JSX.Element {
 									memoryPressurePercent={
 										checkpointData.health.memoryPressurePercent
 									}
+									memoryWiredBytes={checkpointData.health.memoryWiredBytes}
+									swapUsedBytes={checkpointData.health.swapUsedBytes}
+									swapTotalBytes={checkpointData.health.swapTotalBytes}
+									swapUsedPercent={checkpointData.health.swapUsedPercent}
 									loadAverage1m={checkpointData.health.loadAverage1m}
 									loadAverage5m={checkpointData.health.loadAverage5m}
 									loadAverage15m={checkpointData.health.loadAverage15m}

@@ -26,11 +26,43 @@ export interface SystemHealth {
 	memoryTotalBytes: number;
 	memoryFreeBytes: number;
 	memoryUsedBytes: number;
+	/** Wired + active + compressed as a share of RAM — memory that cannot be
+	 * reclaimed on demand. Excludes inactive pages, which macOS hands back
+	 * freely, so a warm file cache no longer reads as critical. */
 	memoryPressurePercent: number;
+	memoryWiredBytes: number;
+	memoryActiveBytes: number;
+	memoryInactiveBytes: number;
+	memoryCompressedBytes: number;
+	swapTotalBytes: number;
+	swapUsedBytes: number;
+	swapFreeBytes: number;
+	swapUsedPercent: number;
+	swapouts: number;
 	loadAverage1m: number;
 	loadAverage5m: number;
 	loadAverage15m: number;
 	scannedAtEpochMs: number;
+}
+
+export type MemoryFailureMode =
+	| "swapThrashing"
+	| "wiredBloat"
+	| "cachePressure"
+	| "processHog"
+	| "deathByAThousandCuts"
+	| "healthy";
+
+export interface MemoryDiagnosis {
+	mode: MemoryFailureMode;
+	headline: string;
+	explanation: string;
+	/** Bytes a remedy could realistically free. Zero means every available
+	 * action is a no-op, which is itself the useful answer. */
+	reclaimableBytes: number;
+	restartRequired: boolean;
+	evidence: string[];
+	suggestedAction: string;
 }
 
 export type SeverityLevel = "critical" | "warning" | "info";
@@ -331,6 +363,16 @@ export const getSystemHealth = async (): Promise<SystemHealth> => {
 export const analyzeIssues = async (): Promise<AnalysisReport> => {
 	ensureTauriRuntime();
 	return invoke<AnalysisReport>("analyze_issues");
+};
+
+/**
+ * Classifies *why* memory is under pressure, which decides whether any remedy
+ * exists. Swap exhaustion and wired bloat cannot be fixed from userspace at
+ * all, so the useful output is often "restart" rather than an action button.
+ */
+export const diagnoseMemoryCondition = async (): Promise<MemoryDiagnosis> => {
+	ensureTauriRuntime();
+	return invoke<MemoryDiagnosis>("diagnose_memory_condition");
 };
 
 export const createReportSnapshot = async (

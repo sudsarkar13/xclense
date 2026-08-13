@@ -202,11 +202,68 @@ pub struct SystemHealth {
   pub memory_total_bytes: u64,
   pub memory_free_bytes: u64,
   pub memory_used_bytes: u64,
+  /// Share of RAM that cannot be reclaimed on demand.
+  ///
+  /// **Not** `(total - free) / total`. That counts inactive and cached pages as
+  /// used, so an idle Mac with a warm file cache reports ~95% and looks
+  /// identical to one that is genuinely dying. macOS reclaims inactive pages
+  /// freely, so only wired + active + compressed represents real demand.
   pub memory_pressure_percent: f64,
+  /// Kernel and driver memory. Never pageable, never reclaimable — the only
+  /// way to release it is a restart. Above roughly a third of RAM this is the
+  /// dominant problem and no cache-clearing remedy will touch it.
+  pub memory_wired_bytes: u64,
+  pub memory_active_bytes: u64,
+  /// Reclaimable on demand. This is the only pool `purge` can release, so its
+  /// size decides whether recommending `purge` is honest or theatre.
+  pub memory_inactive_bytes: u64,
+  pub memory_compressed_bytes: u64,
+  pub swap_total_bytes: u64,
+  pub swap_used_bytes: u64,
+  pub swap_free_bytes: u64,
+  pub swap_used_percent: f64,
+  /// Cumulative since boot. A large value with swap near capacity means the
+  /// machine is thrashing rather than merely having paged out once.
+  pub swapouts: u64,
   pub load_average_1m: f64,
   pub load_average_5m: f64,
   pub load_average_15m: f64,
   pub scanned_at_epoch_ms: u128,
+}
+
+/// What is actually wrong with memory, as opposed to how bad it looks.
+///
+/// These demand different answers and were previously indistinguishable: every
+/// one of them produced "free inactive memory", which only helps in the
+/// `CachePressure` case and silently accomplishes nothing in the others.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MemoryFailureMode {
+  /// Swap near capacity with heavy paging. Restart or shed load.
+  SwapThrashing,
+  /// Kernel/driver memory has ballooned. Only a restart releases it.
+  WiredBloat,
+  /// Large reclaimable cache — the one case where `purge` genuinely helps.
+  CachePressure,
+  /// A single process dominates. Quitting it is the fix.
+  ProcessHog,
+  /// No single offender; many mid-sized processes add up.
+  DeathByAThousandCuts,
+  Healthy,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDiagnosis {
+  pub mode: MemoryFailureMode,
+  pub headline: String,
+  pub explanation: String,
+  /// Bytes a remedy could realistically release. Zero means every available
+  /// action is a no-op and saying so is the useful answer.
+  pub reclaimable_bytes: u64,
+  pub restart_required: bool,
+  pub evidence: Vec<String>,
+  pub suggested_action: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -865,24 +922,75 @@ mod commands {
       .ok_or_else(|| "unable to determine vm_stat page size".to_string())
       .and_then(parse_u64)?;
 
-    let mut free_pages = 0_u64;
-    for line in vm_stat_output.lines() {
-      if line.starts_with("Pages free:") {
-        let value = line
-          .split(':')
-          .nth(1)
-          .unwrap_or("0")
-          .replace(['.', ','], "");
-        free_pages = parse_u64(&value)?;
-      }
-    }
+    // Every field, not just "Pages free". The previous single-field read made
+    // wired and compressed memory invisible, which is exactly where a starved
+    // machine's memory actually goes.
+    let vm_field = |label: &str| -> u64 {
+      vm_stat_output
+        .lines()
+        .find(|line| line.starts_with(label))
+        .and_then(|line| line.split(':').nth(1))
+        .map(|value| value.replace(['.', ','], ""))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+    };
+
+    let free_pages = vm_field("Pages free");
+    let active_pages = vm_field("Pages active");
+    let inactive_pages = vm_field("Pages inactive");
+    let wired_pages = vm_field("Pages wired down");
+    let compressed_pages = vm_field("Pages occupied by compressor");
+    let swapouts = vm_field("Swapouts");
 
     let memory_free_bytes = free_pages.saturating_mul(page_size);
+    let memory_active_bytes = active_pages.saturating_mul(page_size);
+    let memory_inactive_bytes = inactive_pages.saturating_mul(page_size);
+    let memory_wired_bytes = wired_pages.saturating_mul(page_size);
+    let memory_compressed_bytes = compressed_pages.saturating_mul(page_size);
     let memory_used_bytes = memory_total_bytes.saturating_sub(memory_free_bytes);
+
+    // Only genuinely unreclaimable memory counts. Inactive pages are handed
+    // back on demand, so including them (as `total - free` does) reports a
+    // healthy machine with a warm cache as critical and makes the number
+    // useless for telling the two apart.
+    let committed_bytes = memory_wired_bytes
+      .saturating_add(memory_active_bytes)
+      .saturating_add(memory_compressed_bytes);
     let memory_pressure_percent = if memory_total_bytes == 0 {
       0.0
     } else {
-      (memory_used_bytes as f64 / memory_total_bytes as f64) * 100.0
+      ((committed_bytes as f64 / memory_total_bytes as f64) * 100.0).min(100.0)
+    };
+
+    // `sysctl vm.swapusage` prints e.g.
+    //   vm.swapusage: total = 14336.00M  used = 13252.44M  free = 1083.56M
+    // Swap was previously never read at all, so a machine paging itself to
+    // death looked the same as one that had never swapped.
+    let parse_swap_field = |text: &str, label: &str| -> u64 {
+      text
+        .split(label)
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|token| {
+          let (value, scale) = match token.chars().last() {
+            Some('G') => (&token[..token.len() - 1], 1024.0 * 1024.0 * 1024.0),
+            Some('M') => (&token[..token.len() - 1], 1024.0 * 1024.0),
+            Some('K') => (&token[..token.len() - 1], 1024.0),
+            _ => (token, 1.0),
+          };
+          value.parse::<f64>().ok().map(|number| (number * scale) as u64)
+        })
+        .unwrap_or(0)
+    };
+
+    let swap_output = run("sysctl", &["vm.swapusage"]).unwrap_or_default();
+    let swap_total_bytes = parse_swap_field(&swap_output, "total =");
+    let swap_used_bytes = parse_swap_field(&swap_output, "used =");
+    let swap_free_bytes = parse_swap_field(&swap_output, "free =");
+    let swap_used_percent = if swap_total_bytes == 0 {
+      0.0
+    } else {
+      (swap_used_bytes as f64 / swap_total_bytes as f64) * 100.0
     };
 
     let uptime_output = run("uptime", &[])?;
@@ -910,11 +1018,176 @@ mod commands {
       memory_free_bytes,
       memory_used_bytes,
       memory_pressure_percent,
+      memory_wired_bytes,
+      memory_active_bytes,
+      memory_inactive_bytes,
+      memory_compressed_bytes,
+      swap_total_bytes,
+      swap_used_bytes,
+      swap_free_bytes,
+      swap_used_percent,
+      swapouts,
       load_average_1m,
       load_average_5m,
       load_average_15m,
       scanned_at_epoch_ms: now_epoch_ms(),
     })
+  }
+
+  /// Wired memory above this share of RAM is the dominant problem, and nothing
+  /// short of a restart releases it. Normal is roughly 15-25%.
+  const WIRED_BLOAT_THRESHOLD_PERCENT: f64 = 35.0;
+  /// Below this, releasing inactive pages is not worth recommending — it
+  /// completes successfully and changes nothing the user can perceive.
+  const PURGE_WORTH_IT_BYTES: u64 = 1024 * 1024 * 1024;
+
+  /// Works out which memory problem the machine actually has.
+  ///
+  /// Ordered by which cause dominates, not by which is easiest to fix: swap
+  /// exhaustion and wired bloat both make cache-clearing pointless, so they
+  /// must be ruled out before `purge` is ever suggested.
+  pub(crate) fn diagnose_memory(health: &SystemHealth, processes: &[ProcessInfo]) -> MemoryDiagnosis {
+    let gb = |bytes: u64| bytes as f64 / 1_073_741_824.0;
+    let wired_percent = if health.memory_total_bytes == 0 {
+      0.0
+    } else {
+      (health.memory_wired_bytes as f64 / health.memory_total_bytes as f64) * 100.0
+    };
+
+    let mut evidence = vec![
+      format!(
+        "{:.2} GB RAM · {:.0}% committed (wired + active + compressed)",
+        gb(health.memory_total_bytes),
+        health.memory_pressure_percent
+      ),
+      format!(
+        "wired {:.2} GB ({:.0}%) · active {:.2} GB · inactive {:.2} GB · compressed {:.2} GB",
+        gb(health.memory_wired_bytes),
+        wired_percent,
+        gb(health.memory_active_bytes),
+        gb(health.memory_inactive_bytes),
+        gb(health.memory_compressed_bytes)
+      ),
+    ];
+    if health.swap_total_bytes > 0 {
+      evidence.push(format!(
+        "swap {:.2} GB of {:.2} GB used ({:.0}%)",
+        gb(health.swap_used_bytes),
+        gb(health.swap_total_bytes),
+        health.swap_used_percent
+      ));
+    }
+
+    let biggest = processes
+      .iter()
+      .max_by(|a, b| a.memory_percent.total_cmp(&b.memory_percent));
+
+    // Swap first: once the machine is paging heavily, every in-memory remedy
+    // is beside the point.
+    if health.swap_used_percent >= 80.0 {
+      return MemoryDiagnosis {
+        mode: MemoryFailureMode::SwapThrashing,
+        headline: format!("Swap is {:.0}% full — the machine is paging to disk", health.swap_used_percent),
+        explanation: format!(
+          "{:.2} GB of {:.2} GB swap is in use. Everything is competing for memory that no longer exists, \
+           which is why the system feels slow regardless of what you close. Freeing cache will not help: \
+           macOS drains swap only as demand falls, and there is no command that clears it. Restarting is \
+           the reliable fix; closing the heaviest apps first will reduce how much comes straight back.",
+          gb(health.swap_used_bytes),
+          gb(health.swap_total_bytes)
+        ),
+        reclaimable_bytes: 0,
+        restart_required: true,
+        evidence,
+        suggested_action: "restart_to_reclaim_memory".to_string(),
+      };
+    }
+
+    if wired_percent >= WIRED_BLOAT_THRESHOLD_PERCENT {
+      return MemoryDiagnosis {
+        mode: MemoryFailureMode::WiredBloat,
+        headline: format!("{:.0}% of RAM is wired and cannot be reclaimed", wired_percent),
+        explanation: format!(
+          "{:.2} GB is held by the kernel and drivers. Wired memory is never paged out and never released \
+           to applications, so no app you quit and no cache you clear will recover it. Typical is 15-25%. \
+           A restart is the only thing that resets it.",
+          gb(health.memory_wired_bytes)
+        ),
+        reclaimable_bytes: 0,
+        restart_required: true,
+        evidence,
+        suggested_action: "restart_to_reclaim_memory".to_string(),
+      };
+    }
+
+    if let Some(process) = biggest {
+      if process.memory_percent >= 25.0 {
+        return MemoryDiagnosis {
+          mode: MemoryFailureMode::ProcessHog,
+          headline: format!("{} is using {:.0}% of memory", process.name, process.memory_percent),
+          explanation: format!(
+            "A single process accounts for most of the pressure. Quitting or restarting {} (pid {}) \
+             recovers the most memory for the least disruption.",
+            process.name, process.pid
+          ),
+          reclaimable_bytes: ((process.memory_percent as f64 / 100.0)
+            * health.memory_total_bytes as f64) as u64,
+          restart_required: false,
+          evidence,
+          suggested_action: "review_process_candidates".to_string(),
+        };
+      }
+    }
+
+    if health.memory_inactive_bytes >= PURGE_WORTH_IT_BYTES {
+      return MemoryDiagnosis {
+        mode: MemoryFailureMode::CachePressure,
+        headline: format!("{:.2} GB is cached and can be released", gb(health.memory_inactive_bytes)),
+        explanation:
+          "Inactive memory is file cache the kernel hands back on demand. Releasing it is safe and \
+           genuinely frees this much, though macOS would also reclaim it automatically under pressure."
+            .to_string(),
+        reclaimable_bytes: health.memory_inactive_bytes,
+        restart_required: false,
+        evidence,
+        suggested_action: "free_inactive_memory".to_string(),
+      };
+    }
+
+    if health.memory_pressure_percent >= 80.0 {
+      let notable = processes.iter().filter(|p| p.memory_percent >= 2.0).count();
+      return MemoryDiagnosis {
+        mode: MemoryFailureMode::DeathByAThousandCuts,
+        headline: "No single process is responsible".to_string(),
+        explanation: format!(
+          "Memory is committed but no process dominates — {notable} are each holding a noticeable share. \
+           There is nothing to free: only {:.2} GB is cached, so releasing it changes little. Closing \
+           several of the largest, or restarting, is what actually helps.",
+          gb(health.memory_inactive_bytes)
+        ),
+        reclaimable_bytes: health.memory_inactive_bytes,
+        restart_required: false,
+        evidence,
+        suggested_action: "review_process_candidates".to_string(),
+      };
+    }
+
+    MemoryDiagnosis {
+      mode: MemoryFailureMode::Healthy,
+      headline: "Memory is healthy".to_string(),
+      explanation: "Committed memory is within normal range and swap is not under pressure.".to_string(),
+      reclaimable_bytes: health.memory_inactive_bytes,
+      restart_required: false,
+      evidence,
+      suggested_action: "no_action_required".to_string(),
+    }
+  }
+
+  #[tauri::command]
+  pub fn diagnose_memory_condition() -> Result<MemoryDiagnosis, String> {
+    let health = get_system_health()?;
+    let processes = list_processes()?;
+    Ok(diagnose_memory(&health, &processes))
   }
 
   #[tauri::command]
@@ -954,35 +1227,25 @@ mod commands {
       });
     }
 
-    if health.memory_pressure_percent >= 90.0 {
+    // Driven by the diagnosis rather than by the pressure number alone, so the
+    // recommendation matches the actual cause. Reporting "free inactive
+    // memory" against swap exhaustion produced a step that succeeded and
+    // achieved nothing.
+    let memory = diagnose_memory(&health, &processes);
+    if memory.mode != MemoryFailureMode::Healthy {
+      let severity = match memory.mode {
+        MemoryFailureMode::SwapThrashing | MemoryFailureMode::WiredBloat => "critical",
+        _ if health.memory_pressure_percent >= 90.0 => "critical",
+        _ => "warning",
+      };
       issues.push(IssueReport {
-        id: "memory-critical-001".to_string(),
-        title: "Critical memory pressure".to_string(),
-        severity: "critical".to_string(),
+        id: "memory-pressure-001".to_string(),
+        title: memory.headline.clone(),
+        severity: severity.to_string(),
         confidence: 0.95,
-        evidence: vec![format!(
-          "Estimated memory pressure is {:.2}%",
-          health.memory_pressure_percent
-        )],
-        recommendation:
-          "Close memory-heavy applications and restart long-running workloads to avoid instability."
-            .to_string(),
-        suggested_action: "reduce_memory_pressure".to_string(),
-      });
-    } else if health.memory_pressure_percent >= 80.0 {
-      issues.push(IssueReport {
-        id: "memory-warning-001".to_string(),
-        title: "Elevated memory pressure".to_string(),
-        severity: "warning".to_string(),
-        confidence: 0.88,
-        evidence: vec![format!(
-          "Estimated memory pressure is {:.2}%",
-          health.memory_pressure_percent
-        )],
-        recommendation:
-          "Identify high-memory apps and close non-essential sessions before pressure worsens."
-            .to_string(),
-        suggested_action: "inspect_memory_consumers".to_string(),
+        evidence: memory.evidence.clone(),
+        recommendation: memory.explanation.clone(),
+        suggested_action: memory.suggested_action.clone(),
       });
     }
 
@@ -1465,7 +1728,38 @@ mod commands {
     let performed_at = now_epoch_ms();
 
     match step_id {
+      // Advisory only. macOS offers no way for an app to release wired memory
+      // or drain swap, so the honest response is to say a restart is needed
+      // rather than run something that reports success and changes nothing.
+      "restart_to_reclaim_memory" => RemediationStepResult {
+        step_id: step_id.to_string(),
+        status: "manual".to_string(),
+        message:
+          "Restart required. Wired memory and swap cannot be released by any command — macOS frees \
+           them only on reboot. Save your work and restart to reclaim this memory."
+            .to_string(),
+        performed_at_epoch_ms: performed_at,
+      },
       "free_inactive_memory" => {
+        // Only worth running when there is enough inactive memory for the
+        // result to be perceptible. Below the threshold this succeeds and
+        // frees a rounding error, which reads as a fix that did nothing.
+        match get_system_health() {
+          Ok(health) if health.memory_inactive_bytes < PURGE_WORTH_IT_BYTES => {
+            return RemediationStepResult {
+              step_id: step_id.to_string(),
+              status: "skipped".to_string(),
+              message: format!(
+                "Skipped: only {:.2} GB is cached, so releasing it would not measurably help. \
+                 Memory pressure here is coming from somewhere purge cannot reach.",
+                health.memory_inactive_bytes as f64 / 1_073_741_824.0
+              ),
+              performed_at_epoch_ms: performed_at,
+            };
+          }
+          _ => {}
+        }
+
         // macOS `purge` is the supported way to request that the kernel
         // discard clean, inactive file-backed pages. It is documented as
         // safe for end users and does not affect running apps.
@@ -3478,6 +3772,7 @@ pub fn run() {
       commands::scan_storage_for_cleanup,
       commands::cleanup_storage_items,
       commands::check_full_disk_access,
+      commands::diagnose_memory_condition,
       commands::open_full_disk_access_settings
     ])
     .run(tauri::generate_context!())
@@ -3548,3 +3843,110 @@ mod permission_gate_tests {
   }
 }
 
+
+
+#[cfg(test)]
+mod memory_diagnosis_tests {
+  use crate::commands::diagnose_memory;
+  use crate::{MemoryFailureMode, ProcessInfo, SystemHealth};
+
+  const GB: u64 = 1024 * 1024 * 1024;
+
+  fn health(wired: u64, active: u64, inactive: u64, compressed: u64, swap_used: u64, swap_total: u64) -> SystemHealth {
+    let total = 8 * GB;
+    let committed = wired + active + compressed;
+    SystemHealth {
+      memory_total_bytes: total,
+      memory_free_bytes: total.saturating_sub(committed + inactive),
+      memory_used_bytes: committed + inactive,
+      memory_pressure_percent: (committed as f64 / total as f64) * 100.0,
+      memory_wired_bytes: wired,
+      memory_active_bytes: active,
+      memory_inactive_bytes: inactive,
+      memory_compressed_bytes: compressed,
+      swap_total_bytes: swap_total,
+      swap_used_bytes: swap_used,
+      swap_free_bytes: swap_total.saturating_sub(swap_used),
+      swap_used_percent: if swap_total == 0 { 0.0 } else { (swap_used as f64 / swap_total as f64) * 100.0 },
+      swapouts: 0,
+      load_average_1m: 1.0,
+      load_average_5m: 1.0,
+      load_average_15m: 1.0,
+      scanned_at_epoch_ms: 0,
+    }
+  }
+
+  fn process(name: &str, memory_percent: f32) -> ProcessInfo {
+    ProcessInfo { pid: 1, name: name.to_string(), cpu_percent: 1.0, memory_percent, state: "running".to_string() }
+  }
+
+  /// The condition that motivated this work: 8 GB machine, swap at 97%.
+  /// The previous logic reported 99% pressure and recommended `purge`, which
+  /// can only touch the 0.58 GB of inactive memory and leaves swap untouched.
+  #[test]
+  fn swap_exhaustion_demands_a_restart_not_a_cache_purge() {
+    let d = diagnose_memory(&health(4 * GB, GB, GB / 2, 2 * GB, 14 * GB, 15 * GB), &[]);
+    assert_eq!(d.mode, MemoryFailureMode::SwapThrashing);
+    assert!(d.restart_required);
+    assert_eq!(d.suggested_action, "restart_to_reclaim_memory");
+    // Claiming reclaimable bytes here would be the same lie as before.
+    assert_eq!(d.reclaimable_bytes, 0, "nothing can be freed while swap is the problem");
+  }
+
+  /// Wired memory is unpageable, so no amount of quitting apps recovers it.
+  #[test]
+  fn wired_bloat_demands_a_restart() {
+    let d = diagnose_memory(&health(4 * GB, GB, GB / 2, GB / 2, 0, 15 * GB), &[]);
+    assert_eq!(d.mode, MemoryFailureMode::WiredBloat);
+    assert!(d.restart_required);
+    assert_eq!(d.reclaimable_bytes, 0);
+  }
+
+  /// Swap must outrank wired: when both are bad, paging dominates and is the
+  /// thing the user is actually feeling.
+  #[test]
+  fn swap_outranks_wired_when_both_are_critical() {
+    let d = diagnose_memory(&health(4 * GB, GB, GB / 2, 2 * GB, 14 * GB, 15 * GB), &[]);
+    assert_eq!(d.mode, MemoryFailureMode::SwapThrashing);
+  }
+
+  /// The one case where purge is honest.
+  #[test]
+  fn large_cache_is_the_only_case_that_recommends_purge() {
+    let d = diagnose_memory(&health(GB, GB, 3 * GB, GB / 2, GB, 15 * GB), &[]);
+    assert_eq!(d.mode, MemoryFailureMode::CachePressure);
+    assert_eq!(d.suggested_action, "free_inactive_memory");
+    assert_eq!(d.reclaimable_bytes, 3 * GB);
+    assert!(!d.restart_required);
+  }
+
+  #[test]
+  fn a_dominant_process_is_named_rather_than_blamed_on_the_system() {
+    let d = diagnose_memory(
+      &health(GB, 4 * GB, GB / 2, GB / 2, GB, 15 * GB),
+      &[process("Xcode", 40.0), process("Finder", 1.0)],
+    );
+    assert_eq!(d.mode, MemoryFailureMode::ProcessHog);
+    assert!(d.headline.contains("Xcode"));
+    assert!(d.reclaimable_bytes > 0);
+  }
+
+  /// Many mid-sized processes: no hog to blame and nothing meaningful to free.
+  #[test]
+  fn many_small_processes_are_reported_as_having_no_single_cause() {
+    let processes: Vec<ProcessInfo> = (0..8).map(|i| process(&format!("app{i}"), 5.0)).collect();
+    let d = diagnose_memory(&health(2 * GB, 4 * GB, GB / 2, GB, GB, 15 * GB), &processes);
+    assert_eq!(d.mode, MemoryFailureMode::DeathByAThousandCuts);
+    assert!(!d.restart_required);
+  }
+
+  /// A machine with a warm file cache is healthy. The old `total - free`
+  /// formula reported this as ~95% and indistinguishable from a dying system.
+  #[test]
+  fn a_warm_cache_is_not_reported_as_pressure() {
+    let d = diagnose_memory(&health(GB, GB, 4 * GB, GB / 2, 0, 15 * GB), &[]);
+    assert!(d.mode != MemoryFailureMode::SwapThrashing);
+    assert!(d.mode != MemoryFailureMode::WiredBloat);
+    assert!(!d.restart_required);
+  }
+}
